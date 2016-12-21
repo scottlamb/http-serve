@@ -137,7 +137,6 @@ fn any_match(etag: Option<&header::EntityTag>, req: &Request) -> bool {
 /// doing this correctly.
 pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
                     -> Result<(), Error> where Error: From<io::Error> {
-    info!("date: {:?}", req.headers.get::<header::Date>());
     if req.method != Method::Get && req.method != Method::Head {
         *res.status_mut() = hyper::status::StatusCode::MethodNotAllowed;
         res.headers_mut().set(header::ContentType(mime!(Text/Plain)));
