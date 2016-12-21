@@ -1,0 +1,15 @@
+[package]
+name = "http-entity"
+version = "0.0.1"
+authors = ["Scott Lamb <slamb@slamb.org>"]
+license = "MIT"
+
+[dependencies]
+hyper = "0.9"
+log = "0.3"
+mime = "0.2"
+smallvec = "0.2"
+
+[dev-dependencies]
+env_logger = "0.3.5"
+lazy_static = "0.2"
