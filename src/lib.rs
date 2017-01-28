@@ -34,13 +34,22 @@ use std::ops::Range;
 
 /// An HTTP entity for GET and HEAD serving.
 pub trait Entity<Error> where Error: From<io::Error> {
-    /// Returns the length of the slice in bytes.
+    /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 
-    /// Writes bytes within this slice indicated by `range` to `out.`
+    /// Writes bytes indicated by `range` to `out`.
     fn write_to(&self, range: Range<u64>, out: &mut io::Write) -> Result<(), Error>;
 
-    fn content_type(&self) -> mime::Mime;
+    /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
+    /// In particular, these headers are the "other entity-headers" described by [RFC 2616 section
+    /// 10.2.7](https://tools.ietf.org/html/rfc2616#section-10.2.7); they should exclude
+    /// `Content-Range`, `Date`, `ETag`, `Content-Location`, `Expires`, `Cache-Control`, and
+    /// `Vary`.
+    ///
+    /// This function will be called only when that section says that headers such as
+    /// `Content-Type` should be included in the response.
+    fn add_headers(&self, &mut header::Headers);
+
     fn etag(&self) -> Option<&header::EntityTag>;
     fn last_modified(&self) -> &header::HttpDate;
 }
@@ -127,9 +136,7 @@ fn any_match(etag: Option<&header::EntityTag>, req: &Request) -> bool {
 /// Serves GET and HEAD requests for a given byte-ranged resource.
 /// Handles conditional & subrange requests.
 /// The caller is expected to have already determined the correct resource and appended
-/// Expires, Cache-Control, and Vary headers.
-///
-/// TODO: is it appropriate to include those headers on all response codes used in this function?
+/// `Expires`, `Cache-Control`, and `Vary` headers if desired.
 ///
 /// TODO: check HTTP rules about weak vs strong comparisons with range requests. I don't think I'm
 /// doing this correctly.
@@ -243,7 +250,7 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
         }
     };
     if include_entity_headers {
-        res.headers_mut().set(header::ContentType(e.content_type()));
+        e.add_headers(res.headers_mut());
     }
     res.headers_mut().set(header::ContentLength(range.end - range.start));
     let mut stream = res.start()?;
@@ -261,7 +268,7 @@ fn send_multipart<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fre
     let mut each_part_headers = Vec::with_capacity(128);
     if include_entity_headers {
         let mut headers = header::Headers::new();
-        headers.set(header::ContentType(e.content_type()));
+        e.add_headers(&mut headers);
         write!(&mut each_part_headers, "{}", &headers).unwrap();
     }
     each_part_headers.extend_from_slice(b"\r\n");

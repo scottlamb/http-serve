@@ -41,7 +41,6 @@ static BODY: &'static [u8] =
 
 struct FakeEntity {
     etag: Option<hyper::header::EntityTag>,
-    mime: mime::Mime,
     last_modified: hyper::header::HttpDate,
 }
 
@@ -50,7 +49,9 @@ impl http_entity::Entity<io::Error> for FakeEntity {
     fn write_to(&self, range: Range<u64>, out: &mut io::Write) -> Result<(), io::Error> {
         out.write_all(&BODY[range.start as usize .. range.end as usize])
     }
-    fn content_type(&self) -> mime::Mime { self.mime.clone() }
+    fn add_headers(&self, headers: &mut ::hyper::header::Headers) {
+        headers.set(::hyper::header::ContentType(mime!(Application/OctetStream)));
+    }
     fn etag(&self) -> Option<&EntityTag> { self.etag.as_ref() }
     fn last_modified(&self) -> &header::HttpDate { &self.last_modified }
 }
@@ -89,17 +90,14 @@ lazy_static! {
     static ref LATER_DATE: reqwest::header::HttpDate = { LATER_DATE_STR.parse().unwrap() };
     static ref ENTITY_NO_ETAG: FakeEntity = FakeEntity{
         etag: None,
-        mime: mime!(Application/OctetStream),
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
     static ref ENTITY_STRONG_ETAG: FakeEntity = FakeEntity{
         etag: Some(hyper::header::EntityTag::strong("foo".to_owned())),
-        mime: mime!(Application/OctetStream),
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
     static ref ENTITY_WEAK_ETAG: FakeEntity = FakeEntity{
         etag: Some(hyper::header::EntityTag::strong("foo".to_owned())),
-        mime: mime!(Application/OctetStream),
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
     static ref SERVER: String = { new_server() };
