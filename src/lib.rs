@@ -29,7 +29,7 @@ use hyper::method::Method;
 use hyper::net::Fresh;
 use smallvec::SmallVec;
 use std::cmp;
-use std::io;
+use std::io::{self, Write};
 use std::ops::Range;
 
 /// An HTTP entity for GET and HEAD serving.
@@ -221,8 +221,14 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
                 *res.status_mut() = hyper::status::StatusCode::PartialContent;
                 (rs[0].clone(), include_entity_headers_on_range)
             } else {
-                // Ignore multi-part range headers for now. They require additional complexity, and
-                // I don't see clients sending them in the wild.
+                // Before serving multiple ranges via multipart/byteranges, estimate the total
+                // length. ("80" is the RFC's estimate of the size of each part's header.) If it's
+                // more than simply serving the whole entity, do that instead.
+                let est_len: u64 = rs.iter().map(|r| 80 + r.end - r.start).sum();
+                if est_len < len {
+                    return send_multipart(e, req, res, rs, len, include_entity_headers_on_range);
+                }
+
                 (0 .. len, true)
             }
         },
@@ -244,6 +250,50 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
     if req.method == Method::Get {
         e.write_to(range, &mut stream)?;
     }
+    stream.end()?;
+    Ok(())
+}
+
+fn send_multipart<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>,
+                         mut rs: SmallVec<[Range<u64>; 1]>, len: u64, include_entity_headers: bool)
+                         -> Result<(), Error> where Error: From<io::Error> {
+    let mut body_len = 0;
+    let mut each_part_headers = Vec::with_capacity(128);
+    if include_entity_headers {
+        let mut headers = header::Headers::new();
+        headers.set(header::ContentType(e.content_type()));
+        write!(&mut each_part_headers, "{}", &headers).unwrap();
+    }
+    each_part_headers.extend_from_slice(b"\r\n");
+    let mut buf = Vec::with_capacity(rs.len() * (64 + each_part_headers.len()));
+    let mut ends = Vec::with_capacity(rs.len());
+    for r in &rs {
+        write!(&mut buf, "\r\n--B\r\nContent-Range: bytes {}-{}/{}\r\n",
+               r.start, r.end - 1, len).unwrap();
+        ends.push(buf.len());
+        body_len += each_part_headers.len() as u64 + r.end - r.start;
+    }
+    const TRAILER: &'static [u8] = b"\r\n--B--\r\n";
+    body_len += buf.len() as u64 + TRAILER.len() as u64;
+
+    res.headers_mut().set(header::ContentLength(body_len));
+    res.headers_mut().set_raw("Content-Type", vec![b"multipart/byteranges; boundary=B".to_vec()]);
+    *res.status_mut() = hyper::status::StatusCode::PartialContent;
+
+    if req.method == Method::Head {
+        res.send(b"")?;
+        return Ok(());
+    }
+
+    let mut stream = res.start()?;
+    let mut buf_start = 0;
+    for (r, buf_end) in rs.drain().zip(ends) {
+        stream.write(&buf[buf_start .. buf_end])?;
+        buf_start = buf_end;
+        stream.write(&each_part_headers)?;
+        e.write_to(r, &mut stream)?;
+    }
+    stream.write(TRAILER)?;
     stream.end()?;
     Ok(())
 }

@@ -34,17 +34,21 @@ use self::reqwest::header::Range::Bytes;
 use std::io::{self, Read};
 use std::ops::Range;
 
+static BODY: &'static [u8] =
+    b"01234567890123456789012345678901234567890123456789012345678901234567890123456789\
+      01234567890123456789012345678901234567890123456789012345678901234567890123456789\
+      01234567890123456789012345678901234567890123456789012345678901234567890123456789";
+
 struct FakeEntity {
     etag: Option<hyper::header::EntityTag>,
     mime: mime::Mime,
     last_modified: hyper::header::HttpDate,
-    body: &'static [u8],
 }
 
 impl http_entity::Entity<io::Error> for FakeEntity {
-    fn len(&self) -> u64 { self.body.len() as u64 }
+    fn len(&self) -> u64 { BODY.len() as u64 }
     fn write_to(&self, range: Range<u64>, out: &mut io::Write) -> Result<(), io::Error> {
-        out.write_all(&self.body[range.start as usize .. range.end as usize])
+        out.write_all(&BODY[range.start as usize .. range.end as usize])
     }
     fn content_type(&self) -> mime::Mime { self.mime.clone() }
     fn etag(&self) -> Option<&EntityTag> { self.etag.as_ref() }
@@ -87,19 +91,16 @@ lazy_static! {
         etag: None,
         mime: mime!(Application/OctetStream),
         last_modified: SOME_DATE_STR.parse().unwrap(),
-        body: b"01234",
     };
     static ref ENTITY_STRONG_ETAG: FakeEntity = FakeEntity{
         etag: Some(hyper::header::EntityTag::strong("foo".to_owned())),
         mime: mime!(Application/OctetStream),
         last_modified: SOME_DATE_STR.parse().unwrap(),
-        body: b"01234",
     };
     static ref ENTITY_WEAK_ETAG: FakeEntity = FakeEntity{
         etag: Some(hyper::header::EntityTag::strong("foo".to_owned())),
         mime: mime!(Application/OctetStream),
         last_modified: SOME_DATE_STR.parse().unwrap(),
-        body: b"01234",
     };
     static ref SERVER: String = { new_server() };
 }
@@ -119,7 +120,7 @@ fn serve_without_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // If-Match any should still send the full body.
     let mut resp = client.get(&url)
@@ -132,7 +133,7 @@ fn serve_without_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // If-Match by etag doesn't match (as this request has no etag).
     let resp =
@@ -165,7 +166,7 @@ fn serve_without_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // Unmodified since supplied date.
     let mut resp = client.get(&url)
@@ -186,23 +187,50 @@ fn serve_without_etag() {
     assert_eq!(reqwest::StatusCode::PartialContent, *resp.status());
     assert_eq!(Some(&header::ContentRange(ContentRangeSpec::Bytes{
         range: Some((1, 3)),
-        instance_length: Some(5),
+        instance_length: Some(BODY.len() as u64),
     })), resp.headers().get());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"123", &buf[..]);
 
-    // Range serving - multiple ranges. Currently falls back to whole range.
+    // Range serving - multiple ranges.
     let mut resp = client.get(&url)
                          .header(Bytes(vec![ByteRangeSpec::FromTo(0, 1),
                                             ByteRangeSpec::FromTo(3, 4)]))
                          .send()
                          .unwrap();
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
-    assert_eq!(reqwest::StatusCode::Ok, *resp.status());
+    assert_eq!(reqwest::StatusCode::PartialContent, *resp.status());
+    assert_eq!(Some(&header::ContentType("multipart/byteranges; boundary=B".parse().unwrap())),
+               resp.headers().get::<header::ContentType>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!("\
+               \r\n--B\r\n\
+               Content-Range: bytes 0-1/240\r\n\
+               Content-Type: application/octet-stream\r\n\
+               \r\n\
+               01\r\n\
+               --B\r\n\
+               Content-Range: bytes 3-4/240\r\n\
+               Content-Type: application/octet-stream\r\n\
+               \r\n\
+               34\r\n\
+               --B--\r\n"[..], String::from_utf8(buf.clone()).unwrap());
+
+    // Range serving - multiple ranges which are less efficient than sending the whole.
+    let mut resp = client.get(&url)
+                         .header(Bytes(vec![ByteRangeSpec::FromTo(0, 100),
+                                            ByteRangeSpec::FromTo(120, 240)]))
+                         .send()
+                         .unwrap();
+    assert_eq!(None, resp.headers().get::<header::ContentRange>());
+    assert_eq!(reqwest::StatusCode::Ok, *resp.status());
+    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+               resp.headers().get::<header::ContentType>());
+    buf.clear();
+    resp.read_to_end(&mut buf).unwrap();
+    assert_eq!(BODY, &buf[..]);
 
     // Range serving - not satisfiable.
     let mut resp = client.get(&url)
@@ -212,7 +240,7 @@ fn serve_without_etag() {
     assert_eq!(reqwest::StatusCode::RangeNotSatisfiable, *resp.status());
     assert_eq!(Some(&header::ContentRange(ContentRangeSpec::Bytes{
         range: None,
-        instance_length: Some(5),
+        instance_length: Some(BODY.len() as u64),
     })), resp.headers().get());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
@@ -227,7 +255,7 @@ fn serve_without_etag() {
     assert_eq!(reqwest::StatusCode::PartialContent, *resp.status());
     assert_eq!(Some(&header::ContentRange(ContentRangeSpec::Bytes{
         range: Some((1, 3)),
-        instance_length: Some(5),
+        instance_length: Some(BODY.len() as u64),
     })), resp.headers().get());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
@@ -245,7 +273,7 @@ fn serve_without_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // Range serving - this resource has no etag, so any If-Range by etag ignores the range.
     let mut resp =
@@ -260,7 +288,7 @@ fn serve_without_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 }
 
 #[test]
@@ -281,7 +309,7 @@ fn serve_with_strong_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // If-Match by matching etag should send the full body.
     let mut resp =
@@ -295,7 +323,7 @@ fn serve_with_strong_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // If-Match by etag which doesn't match.
     let resp =
@@ -327,7 +355,7 @@ fn serve_with_strong_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // Range serving - If-Range matching by etag.
     let mut resp =
@@ -340,7 +368,7 @@ fn serve_with_strong_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentType>());
     assert_eq!(Some(&header::ContentRange(ContentRangeSpec::Bytes{
         range: Some((1, 3)),
-        instance_length: Some(5),
+        instance_length: Some(BODY.len() as u64),
     })), resp.headers().get());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
@@ -359,7 +387,7 @@ fn serve_with_strong_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 }
 
 #[test]
@@ -380,7 +408,7 @@ fn serve_with_weak_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // If-Match by etag doesn't match because matches use the strong comparison function.
     let resp =
@@ -412,7 +440,7 @@ fn serve_with_weak_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // Range serving - If-Range matching by weak etag isn't sufficient.
     let mut resp =
@@ -427,5 +455,5 @@ fn serve_with_weak_etag() {
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"01234", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 }
