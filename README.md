@@ -5,13 +5,12 @@ HTTP entities, handling conditional GETs and byte range serving. This was
 extracted from [moonfire-nvr](https://github.com/scottlamb/moonfire-nvr)'s
 `.mp4` file serving.
 
-The API is unstable:
+The API is in flight:
 
-   * Currently it's based on the hyper 0.9.x interface. This is likely to
-     change in the future to a future hyper async interface or to a
-     higher-level abstraction such as Iron.
-   * Other details may change if needed to better support serving multiple
-     encodings, caching, varies, etc.
+   * The `master` branch is based on hyper 0.10.x.
+   * The `hyper-0.11.x` branch is based on hyper's master branch, which is
+     intended to become hyper 0.11.x. The hyper API, and the http-entity API,
+     are still unstable.
 
 ## Author
 
