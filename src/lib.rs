@@ -19,27 +19,32 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+extern crate futures;
 extern crate hyper;
 #[macro_use] extern crate mime;
 extern crate smallvec;
 extern crate time;
+extern crate tokio_core;
 
+use futures::{Future, Stream, Sink};
+use futures::future::{self, FutureResult};
+use hyper::Error;
 use hyper::server::{Request, Response};
 use hyper::header;
-use hyper::method::Method;
-use hyper::net::Fresh;
+use hyper::Method;
 use smallvec::SmallVec;
 use std::cmp;
-use std::io::{self, Write};
+use std::io::Write;
 use std::ops::Range;
+use tokio_core::reactor;
 
 /// An HTTP entity for GET and HEAD serving.
-pub trait Entity<Error> where Error: From<io::Error> {
+pub trait Entity {
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 
-    /// Writes bytes indicated by `range` to `out`.
-    fn write_to(&self, range: Range<u64>, out: &mut io::Write) -> Result<(), Error>;
+    /// Gets the bytes indicated by `range`.
+    fn get_range(&self, range: Range<u64>) -> hyper::Body;
 
     /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
     /// In particular, these headers are the "other entity-headers" described by [RFC 2616 section
@@ -99,7 +104,7 @@ fn parse_range_header(range: Option<&header::Range>, resource_len: u64) -> Resol
 
 /// Returns true if `req` doesn't have an `If-None-Match` header matching `req`.
 fn none_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
-    match req.headers.get::<header::IfNoneMatch>() {
+    match req.headers().get::<header::IfNoneMatch>() {
         Some(&header::IfNoneMatch::Any) => false,
         Some(&header::IfNoneMatch::Items(ref items)) => {
             if let Some(ref some_etag) = *etag {
@@ -117,7 +122,7 @@ fn none_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 
 /// Returns true if `req` has no `If-Match` header or one which matches `etag`.
 fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
-    match req.headers.get::<header::IfMatch>() {
+    match req.headers().get::<header::IfMatch>() {
         // The absent header and "If-Match: *" cases differ only when there is no entity to serve.
         // We always have an entity to serve, so consider them identical.
         None | Some(&header::IfMatch::Any) => true,
@@ -141,14 +146,14 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 ///
 /// TODO: check HTTP rules about weak vs strong comparisons with range requests. I don't think I'm
 /// doing this correctly.
-pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
-                    -> Result<(), Error> where Error: From<io::Error> {
-    if req.method != Method::Get && req.method != Method::Head {
-        *res.status_mut() = hyper::status::StatusCode::MethodNotAllowed;
-        res.headers_mut().set(header::ContentType(mime!(Text/Plain)));
-        res.headers_mut().set(header::Allow(vec![Method::Get, Method::Head]));
-        res.send(b"This resource only supports GET and HEAD.")?;
-        return Ok(());
+pub fn serve(h: &reactor::Handle, e: &Entity, req: &Request) -> FutureResult<Response, Error> {
+    if *req.method() != Method::Get && *req.method() != Method::Head {
+        return future::ok(
+            Response::new()
+            .with_status(hyper::status::StatusCode::MethodNotAllowed)
+            .with_header(header::ContentType(mime!(Text/Plain)))
+            .with_header(header::Allow(vec![Method::Get, Method::Head]))
+            .with_body(&b"This resource only supports GET and HEAD."[..]));
     }
 
     let last_modified = e.last_modified();
@@ -157,21 +162,21 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
     let precondition_failed = if !any_match(&etag, req) {
         true
     } else if let (Some(ref m), Some(&header::IfUnmodifiedSince(ref since))) =
-                  (last_modified, req.headers.get()) {
+                  (last_modified, req.headers().get()) {
         m.0.to_timespec() > since.0.to_timespec()
     } else { false };
 
     let not_modified = if !none_match(&etag, req) {
         true
     } else if let (Some(ref m), Some(&header::IfModifiedSince(ref since))) =
-                  (last_modified, req.headers.get()) {
+                  (last_modified, req.headers().get()) {
         m <= since
     } else { false };
 
     // See RFC 2616 section 10.2.7: a Partial Content response should include certain
     // entity-headers or not based on the If-Range response.
-    let mut range_hdr = req.headers.get::<header::Range>();
-    let include_entity_headers_on_range = match req.headers.get::<header::IfRange>() {
+    let mut range_hdr = req.headers().get::<header::Range>();
+    let include_entity_headers_on_range = match req.headers().get::<header::IfRange>() {
         Some(&header::IfRange::EntityTag(ref if_etag)) => {
             if let Some(ref some_etag) = etag {
                 if if_etag.strong_eq(some_etag) {
@@ -204,6 +209,7 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
         None => true,
     };
 
+    let mut res = Response::new();
     res.headers_mut().set(header::AcceptRanges(vec![header::RangeUnit::Bytes]));
     if let Some(m) = last_modified {
         // See RFC 2616 section 14.29: the Last-Modified must not exceed the Date. To guarantee
@@ -222,15 +228,13 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
     }
 
     if precondition_failed {
-        *res.status_mut() = hyper::status::StatusCode::PreconditionFailed;
-        res.send(b"Precondition failed")?;
-        return Ok(());
+        res.set_status(hyper::status::StatusCode::PreconditionFailed);
+        return future::ok(res.with_body(&b"Precondition failed"[..]))
     }
 
     if not_modified {
-        *res.status_mut() = hyper::status::StatusCode::NotModified;
-        res.send(b"")?;
-        return Ok(());
+        res.set_status(hyper::status::StatusCode::NotModified);
+        return future::ok(res);
     }
 
     let len = e.len();
@@ -242,7 +246,7 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
                     header::ContentRangeSpec::Bytes{
                         range: Some((rs[0].start, rs[0].end-1)),
                         instance_length: Some(len)}));
-                *res.status_mut() = hyper::status::StatusCode::PartialContent;
+                res.set_status(hyper::status::StatusCode::PartialContent);
                 (rs[0].clone(), include_entity_headers_on_range)
             } else {
                 // Before serving multiple ranges via multipart/byteranges, estimate the total
@@ -250,7 +254,7 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
                 // more than simply serving the whole entity, do that instead.
                 let est_len: u64 = rs.iter().map(|r| 80 + r.end - r.start).sum();
                 if est_len < len {
-                    return send_multipart(e, req, res, rs, len, include_entity_headers_on_range);
+                    return send_multipart(h, e, req, &rs, len, include_entity_headers_on_range);
                 }
 
                 (0 .. len, true)
@@ -261,26 +265,23 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
                 header::ContentRangeSpec::Bytes{
                     range: None,
                     instance_length: Some(len)}));
-            *res.status_mut() = hyper::status::StatusCode::RangeNotSatisfiable;
-            res.send(b"")?;
-            return Ok(());
+            res.set_status(hyper::status::StatusCode::RangeNotSatisfiable);
+            return future::ok(res);
         }
     };
     if include_entity_headers {
         e.add_headers(res.headers_mut());
     }
     res.headers_mut().set(header::ContentLength(range.end - range.start));
-    let mut stream = res.start()?;
-    if req.method == Method::Get {
-        e.write_to(range, &mut stream)?;
+    if *req.method() == Method::Head {
+        return future::ok(res);
     }
-    stream.end()?;
-    Ok(())
+
+    future::ok(res.with_body(e.get_range(range)))
 }
 
-fn send_multipart<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>,
-                         mut rs: SmallVec<[Range<u64>; 1]>, len: u64, include_entity_headers: bool)
-                         -> Result<(), Error> where Error: From<io::Error> {
+fn send_multipart(h: &reactor::Handle, e: &Entity, req: &Request, rs: &[Range<u64>],
+                  len: u64, include_entity_headers: bool) -> FutureResult<Response, Error> {
     let mut body_len = 0;
     let mut each_part_headers = Vec::with_capacity(128);
     if include_entity_headers {
@@ -289,37 +290,36 @@ fn send_multipart<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fre
         write!(&mut each_part_headers, "{}", &headers).unwrap();
     }
     each_part_headers.extend_from_slice(b"\r\n");
-    let mut buf = Vec::with_capacity(rs.len() * (64 + each_part_headers.len()));
-    let mut ends = Vec::with_capacity(rs.len());
-    for r in &rs {
+    let mut parts: Vec<Result<hyper::Body, Error>> = Vec::with_capacity(2 * rs.len() + 1);
+    for r in rs {
+        let mut buf = Vec::with_capacity(64 + each_part_headers.len());
         write!(&mut buf, "\r\n--B\r\nContent-Range: bytes {}-{}/{}\r\n",
                r.start, r.end - 1, len).unwrap();
-        ends.push(buf.len());
-        body_len += each_part_headers.len() as u64 + r.end - r.start;
+        buf.extend_from_slice(&each_part_headers);
+        body_len += buf.len() as u64 + r.end - r.start;
+        parts.push(Ok(buf.into()));
+        parts.push(Ok(e.get_range(r.clone())));
     }
     const TRAILER: &'static [u8] = b"\r\n--B--\r\n";
-    body_len += buf.len() as u64 + TRAILER.len() as u64;
+    parts.push(Ok(TRAILER.into()));
+    body_len += TRAILER.len() as u64;
 
+    let mut res = Response::new();
     res.headers_mut().set(header::ContentLength(body_len));
     res.headers_mut().set_raw("Content-Type", vec![b"multipart/byteranges; boundary=B".to_vec()]);
-    *res.status_mut() = hyper::status::StatusCode::PartialContent;
+    res.set_status(hyper::status::StatusCode::PartialContent);
 
-    if req.method == Method::Head {
-        res.send(b"")?;
-        return Ok(());
+    if *req.method() == Method::Head {
+        return future::ok(res);
     }
 
-    let mut stream = res.start()?;
-    let mut buf_start = 0;
-    for (r, buf_end) in rs.drain().zip(ends) {
-        stream.write(&buf[buf_start .. buf_end])?;
-        buf_start = buf_end;
-        stream.write(&each_part_headers)?;
-        e.write_to(r, &mut stream)?;
-    }
-    stream.write(TRAILER)?;
-    stream.end()?;
-    Ok(())
+    let (sink, body) = hyper::Body::pair();
+    res.set_body(body);
+    let flattened = ::futures::stream::iter(parts).flatten().then(|i| future::ok(i));
+    h.spawn(sink.send_all(flattened)
+                .map(|_| ())
+                .map_err(|_| ()));
+    future::ok(res)
 }
 
 #[cfg(test)]

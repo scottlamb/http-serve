@@ -19,20 +19,23 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
+extern crate futures;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate log;
 extern crate http_entity;
 extern crate hyper;
 #[macro_use] extern crate mime;
 extern crate smallvec;
+extern crate tokio_core;
 
 extern crate env_logger;
 extern crate reqwest;
 
-use self::reqwest::header::{self, ByteRangeSpec, ContentRangeSpec, EntityTag};
-use self::reqwest::header::Range::Bytes;
-use std::io::{self, Read};
+use reqwest::header::{self, ByteRangeSpec, ContentRangeSpec, EntityTag};
+use reqwest::header::Range::Bytes;
+use std::io::Read;
 use std::ops::Range;
+use std::sync::Mutex;
 
 static BODY: &'static [u8] =
     b"01234567890123456789012345678901234567890123456789012345678901234567890123456789\
@@ -44,41 +47,54 @@ struct FakeEntity {
     last_modified: hyper::header::HttpDate,
 }
 
-impl http_entity::Entity<io::Error> for FakeEntity {
+impl http_entity::Entity for FakeEntity {
     fn len(&self) -> u64 { BODY.len() as u64 }
-    fn write_to(&self, range: Range<u64>, out: &mut io::Write) -> Result<(), io::Error> {
-        out.write_all(&BODY[range.start as usize .. range.end as usize])
+    fn get_range(&self, range: Range<u64>) -> hyper::Body {
+        BODY[range.start as usize .. range.end as usize].into()
     }
     fn add_headers(&self, headers: &mut ::hyper::header::Headers) {
         headers.set(::hyper::header::ContentType(mime!(Application/OctetStream)));
     }
-    fn etag(&self) -> Option<EntityTag> { self.etag.clone() }
-    fn last_modified(&self) -> Option<header::HttpDate> { Some(self.last_modified) }
+    fn etag(&self) -> Option<hyper::header::EntityTag> { self.etag.clone() }
+    fn last_modified(&self) -> Option<hyper::header::HttpDate> { Some(self.last_modified) }
+}
+
+struct MyService(::tokio_core::reactor::Remote);
+
+impl hyper::server::Service for MyService {
+    type Request = hyper::server::Request;
+    type Response = hyper::server::Response;
+    type Error = hyper::Error;
+    type Future = ::futures::future::FutureResult<hyper::server::Response, hyper::Error>;
+
+    fn call(&self, req: hyper::server::Request) -> Self::Future {
+        let entity: &'static FakeEntity = match req.uri().path() {
+            "/none" => &*ENTITY_NO_ETAG,
+            "/strong" => &*ENTITY_STRONG_ETAG,
+            "/weak" => &*ENTITY_WEAK_ETAG,
+            p => panic!("unexpected path {}", p),
+        };
+        let h = self.0.handle().unwrap();
+        http_entity::serve(&h, entity, &req)
+    }
 }
 
 fn new_server() -> String {
-    let mut listener = hyper::net::HttpListener::new("127.0.0.1:0").unwrap();
-    use hyper::net::NetworkListener;
-    let addr = listener.local_addr().unwrap();
-    let server = hyper::Server::new(listener);
-    use std::thread::spawn;
-    spawn(move || {
-        use hyper::server::{Request, Response, Fresh};
-        let _ = server.handle(move |req: Request, res: Response<Fresh>| {
-            use hyper::uri::RequestUri;
-            let path = match req.uri {
-                RequestUri::AbsolutePath(ref p) => p,
-                x => panic!("unexpected uri type {:?}", x),
-            };
-            let entity = match path.as_str() {
-                "/none" => &*ENTITY_NO_ETAG,
-                "/strong" => &*ENTITY_STRONG_ETAG,
-                "/weak" => &*ENTITY_WEAK_ETAG,
-                p => panic!("unexpected path {}", p),
-            };
-            http_entity::serve(entity, &req, res).unwrap();
-        });
+    let (tx, rx) = ::std::sync::mpsc::channel();
+    ::std::thread::spawn(move || {
+        let addr = "127.0.0.1:0".parse().unwrap();
+        let server = hyper::server::Http::new().bind(&addr, || {
+            info!("creating a service");
+            let handle = REACTOR.lock().unwrap().as_ref().unwrap().clone();
+            Ok(MyService(handle))
+        }).unwrap();
+        let addr = server.local_addr().unwrap();
+        let handle = server.handle();
+        *REACTOR.lock().unwrap() = Some(handle.remote().clone());
+        tx.send(addr).unwrap();
+        server.run().unwrap()
     });
+    let addr = rx.recv().unwrap();
     format!("http://{}:{}", addr.ip(), addr.port())
 }
 
@@ -101,6 +117,7 @@ lazy_static! {
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
     static ref SERVER: String = { new_server() };
+    static ref REACTOR: Mutex<Option<::tokio_core::reactor::Remote>> = { Mutex::new(None) };
 }
 
 #[test]
