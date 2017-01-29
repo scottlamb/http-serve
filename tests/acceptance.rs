@@ -52,8 +52,8 @@ impl http_entity::Entity<io::Error> for FakeEntity {
     fn add_headers(&self, headers: &mut ::hyper::header::Headers) {
         headers.set(::hyper::header::ContentType(mime!(Application/OctetStream)));
     }
-    fn etag(&self) -> Option<&EntityTag> { self.etag.as_ref() }
-    fn last_modified(&self) -> &header::HttpDate { &self.last_modified }
+    fn etag(&self) -> Option<EntityTag> { self.etag.clone() }
+    fn last_modified(&self) -> Option<header::HttpDate> { Some(self.last_modified) }
 }
 
 fn new_server() -> String {

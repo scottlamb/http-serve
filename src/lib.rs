@@ -50,8 +50,8 @@ pub trait Entity<Error> where Error: From<io::Error> {
     /// `Content-Type` should be included in the response.
     fn add_headers(&self, &mut header::Headers);
 
-    fn etag(&self) -> Option<&header::EntityTag>;
-    fn last_modified(&self) -> &header::HttpDate;
+    fn etag(&self) -> Option<header::EntityTag>;
+    fn last_modified(&self) -> Option<header::HttpDate>;
 }
 
 #[derive(Debug, Eq, PartialEq)]
@@ -97,11 +97,11 @@ fn parse_range_header(range: Option<&header::Range>, resource_len: u64) -> Resol
 }
 
 /// Returns true if `req` doesn't have an `If-None-Match` header matching `req`.
-fn none_match(etag: Option<&header::EntityTag>, req: &Request) -> bool {
+fn none_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
     match req.headers.get::<header::IfNoneMatch>() {
         Some(&header::IfNoneMatch::Any) => false,
         Some(&header::IfNoneMatch::Items(ref items)) => {
-            if let Some(some_etag) = etag {
+            if let Some(ref some_etag) = *etag {
                 for item in items {
                     if item.weak_eq(some_etag) {
                         return false;
@@ -115,13 +115,13 @@ fn none_match(etag: Option<&header::EntityTag>, req: &Request) -> bool {
 }
 
 /// Returns true if `req` has no `If-Match` header or one which matches `etag`.
-fn any_match(etag: Option<&header::EntityTag>, req: &Request) -> bool {
+fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
     match req.headers.get::<header::IfMatch>() {
         // The absent header and "If-Match: *" cases differ only when there is no entity to serve.
         // We always have an entity to serve, so consider them identical.
         None | Some(&header::IfMatch::Any) => true,
         Some(&header::IfMatch::Items(ref items)) => {
-            if let Some(some_etag) = etag {
+            if let Some(ref some_etag) = *etag {
                 for item in items {
                     if item.strong_eq(some_etag) {
                         return true;
@@ -152,47 +152,27 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
 
     let last_modified = e.last_modified();
     let etag = e.etag();
-    res.headers_mut().set(header::AcceptRanges(vec![header::RangeUnit::Bytes]));
-    res.headers_mut().set(header::LastModified(*last_modified));
-    if let Some(some_etag) = etag {
-        res.headers_mut().set(header::ETag(some_etag.clone()));
-    }
 
-    if let Some(&header::IfUnmodifiedSince(ref since)) = req.headers.get() {
-        if last_modified.0.to_timespec() > since.0.to_timespec() {
-            *res.status_mut() = hyper::status::StatusCode::PreconditionFailed;
-            res.send(b"Precondition failed")?;
-            return Ok(());
-        }
-    }
+    let precondition_failed = if !any_match(&etag, req) {
+        true
+    } else if let (Some(ref m), Some(&header::IfUnmodifiedSince(ref since))) =
+                  (last_modified, req.headers.get()) {
+        m.0.to_timespec() > since.0.to_timespec()
+    } else { false };
 
-    if !any_match(etag, req) {
-        *res.status_mut() = hyper::status::StatusCode::PreconditionFailed;
-        res.send(b"Precondition failed")?;
-        return Ok(());
-    }
-
-    if !none_match(etag, req) {
-        *res.status_mut() = hyper::status::StatusCode::NotModified;
-        res.send(b"")?;
-        return Ok(());
-    }
-
-    if let Some(&header::IfModifiedSince(ref since)) = req.headers.get() {
-        if last_modified <= since {
-            *res.status_mut() = hyper::status::StatusCode::NotModified;
-            res.send(b"")?;
-            return Ok(());
-        }
-    }
-
-    let mut range_hdr = req.headers.get::<header::Range>();
+    let not_modified = if !none_match(&etag, req) {
+        true
+    } else if let (Some(ref m), Some(&header::IfModifiedSince(ref since))) =
+                  (last_modified, req.headers.get()) {
+        m <= since
+    } else { false };
 
     // See RFC 2616 section 10.2.7: a Partial Content response should include certain
     // entity-headers or not based on the If-Range response.
+    let mut range_hdr = req.headers.get::<header::Range>();
     let include_entity_headers_on_range = match req.headers.get::<header::IfRange>() {
         Some(&header::IfRange::EntityTag(ref if_etag)) => {
-            if let Some(some_etag) = etag {
+            if let Some(ref some_etag) = etag {
                 if if_etag.strong_eq(some_etag) {
                     false
                 } else {
@@ -205,17 +185,44 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
             }
         },
         Some(&header::IfRange::Date(ref if_date)) => {
-            // The to_timespec conversion appears necessary because in the If-Range off the wire,
-            // fields such as tm_yday are absent, causing strict equality to spuriously fail.
-            if if_date.0.to_timespec() != last_modified.0.to_timespec() {
+            if let Some(ref m) = last_modified {
+                // The to_timespec conversion appears necessary because in the If-Range off the
+                // wire, fields such as tm_yday are absent, causing strict equality to spuriously
+                // fail.
+                if if_date.0.to_timespec() != m.0.to_timespec() {
+                    range_hdr = None;
+                    true
+                } else {
+                    false
+                }
+            } else {
                 range_hdr = None;
                 true
-            } else {
-                false
             }
         },
         None => true,
     };
+
+    res.headers_mut().set(header::AcceptRanges(vec![header::RangeUnit::Bytes]));
+    if let Some(m) = last_modified {
+        res.headers_mut().set(header::LastModified(m));
+    }
+    if let Some(e) = etag {
+        res.headers_mut().set(header::ETag(e));
+    }
+
+    if precondition_failed {
+        *res.status_mut() = hyper::status::StatusCode::PreconditionFailed;
+        res.send(b"Precondition failed")?;
+        return Ok(());
+    }
+
+    if not_modified {
+        *res.status_mut() = hyper::status::StatusCode::NotModified;
+        res.send(b"")?;
+        return Ok(());
+    }
+
     let len = e.len();
     let (range, include_entity_headers) = match parse_range_header(range_hdr, len) {
         ResolvedRanges::None => (0 .. len, true),
