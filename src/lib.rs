@@ -22,6 +22,7 @@
 extern crate hyper;
 #[macro_use] extern crate mime;
 extern crate smallvec;
+extern crate time;
 
 use hyper::server::{Request, Response};
 use hyper::header;
@@ -205,7 +206,16 @@ pub fn serve<Error>(e: &Entity<Error>, req: &Request, mut res: Response<Fresh>)
 
     res.headers_mut().set(header::AcceptRanges(vec![header::RangeUnit::Bytes]));
     if let Some(m) = last_modified {
-        res.headers_mut().set(header::LastModified(m));
+        // See RFC 2616 section 14.29: the Last-Modified must not exceed the Date. To guarantee
+        // this, setet the Date now (if one hasn't already been set) rather than let hyper set it.
+        let d = if let Some(&header::Date(header::HttpDate(d))) = res.headers().get() {
+            d
+        } else {
+            let d = time::now_utc();
+            res.headers_mut().set(header::Date(header::HttpDate(d)));
+            d
+        };
+        res.headers_mut().set(header::LastModified(::std::cmp::min(m, header::HttpDate(d))));
     }
     if let Some(e) = etag {
         res.headers_mut().set(header::ETag(e));
