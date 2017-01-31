@@ -35,11 +35,11 @@ use hyper::Method;
 use smallvec::SmallVec;
 use std::cmp;
 use std::io::Write;
-use std::ops::Range;
+use std::ops::{Deref, Range};
 use tokio_core::reactor;
 
 /// An HTTP entity for GET and HEAD serving.
-pub trait Entity {
+pub trait Entity : 'static {
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 
@@ -144,9 +144,16 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 /// The caller is expected to have already determined the correct resource and appended
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
 ///
+/// `e` can be any of the following:
+///
+///    * `&'static SomeEntity`
+///    * `Box<SomeEntity>`
+///    * `Arc<SomeEntity>`
+///
 /// TODO: check HTTP rules about weak vs strong comparisons with range requests. I don't think I'm
 /// doing this correctly.
-pub fn serve(h: &reactor::Handle, e: &Entity, req: &Request) -> FutureResult<Response, Error> {
+pub fn serve<D, E>(h: &reactor::Handle, e: D, req: &Request) -> FutureResult<Response, Error>
+where D: Deref<Target = E> + Send + 'static, E: Entity {
     if *req.method() != Method::Get && *req.method() != Method::Head {
         return future::ok(
             Response::new()
@@ -254,7 +261,7 @@ pub fn serve(h: &reactor::Handle, e: &Entity, req: &Request) -> FutureResult<Res
                 // more than simply serving the whole entity, do that instead.
                 let est_len: u64 = rs.iter().map(|r| 80 + r.end - r.start).sum();
                 if est_len < len {
-                    return send_multipart(h, e, req, &rs, len, include_entity_headers_on_range);
+                    return send_multipart(h, e, req, rs, len, include_entity_headers_on_range);
                 }
 
                 (0 .. len, true)
@@ -280,8 +287,9 @@ pub fn serve(h: &reactor::Handle, e: &Entity, req: &Request) -> FutureResult<Res
     future::ok(res.with_body(e.get_range(range)))
 }
 
-fn send_multipart(h: &reactor::Handle, e: &Entity, req: &Request, rs: &[Range<u64>],
-                  len: u64, include_entity_headers: bool) -> FutureResult<Response, Error> {
+fn send_multipart<D, E>(h: &reactor::Handle, e: D, req: &Request, rs: SmallVec<[Range<u64>; 1]>,
+                        len: u64, include_entity_headers: bool) -> FutureResult<Response, Error>
+where D: Deref<Target = E> + Send + 'static, E: Entity {
     let mut body_len = 0;
     let mut each_part_headers = Vec::with_capacity(128);
     if include_entity_headers {
@@ -290,18 +298,17 @@ fn send_multipart(h: &reactor::Handle, e: &Entity, req: &Request, rs: &[Range<u6
         write!(&mut each_part_headers, "{}", &headers).unwrap();
     }
     each_part_headers.extend_from_slice(b"\r\n");
-    let mut parts: Vec<Result<hyper::Body, Error>> = Vec::with_capacity(2 * rs.len() + 1);
-    for r in rs {
+
+    let mut part_headers: Vec<Vec<u8>> = Vec::with_capacity(2 * rs.len() + 1);
+    for r in &rs {
         let mut buf = Vec::with_capacity(64 + each_part_headers.len());
         write!(&mut buf, "\r\n--B\r\nContent-Range: bytes {}-{}/{}\r\n",
                r.start, r.end - 1, len).unwrap();
         buf.extend_from_slice(&each_part_headers);
         body_len += buf.len() as u64 + r.end - r.start;
-        parts.push(Ok(buf.into()));
-        parts.push(Ok(e.get_range(r.clone())));
+        part_headers.push(buf);
     }
     const TRAILER: &'static [u8] = b"\r\n--B--\r\n";
-    parts.push(Ok(TRAILER.into()));
     body_len += TRAILER.len() as u64;
 
     let mut res = Response::new();
@@ -313,9 +320,26 @@ fn send_multipart(h: &reactor::Handle, e: &Entity, req: &Request, rs: &[Range<u6
         return future::ok(res);
     }
 
+    // Create bodies, a stream of ::hyper::Body structs as follows: each part's header and body
+    // (the latter produced lazily), then the overall trailer.
+    let bodies = ::futures::stream::unfold(0, move |state| {
+        let i = state >> 1;
+        let odd = (state & 1) == 1;
+        if i == rs.len() && odd {
+            None
+        } else if i == rs.len() {
+            Some(future::ok::<_, Error>((TRAILER.into(), state + 1)))
+        } else if odd {
+            Some(future::ok((e.get_range(rs[i].clone()), state + 1)))
+        } else {
+            Some(future::ok((::std::mem::replace(&mut part_headers[i], Vec::new()).into(),
+                             state + 1)))
+        }
+    });
+
     let (sink, body) = hyper::Body::pair();
     res.set_body(body);
-    let flattened = ::futures::stream::iter(parts).flatten().then(|i| future::ok(i));
+    let flattened = bodies.flatten().then(|i| future::ok(i));
     h.spawn(sink.send_all(flattened)
                 .map(|_| ())
                 .map_err(|_| ()));
