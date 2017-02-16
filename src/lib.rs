@@ -27,7 +27,7 @@ extern crate time;
 extern crate tokio_core;
 
 use futures::{Future, Stream, Sink};
-use futures::future::{self, FutureResult};
+use futures::future;
 use hyper::Error;
 use hyper::server::{Request, Response};
 use hyper::header;
@@ -35,11 +35,11 @@ use hyper::Method;
 use smallvec::SmallVec;
 use std::cmp;
 use std::io::Write;
-use std::ops::{Deref, Range};
+use std::ops::Range;
 use tokio_core::reactor;
 
 /// An HTTP entity for GET and HEAD serving.
-pub trait Entity : 'static {
+pub trait Entity : 'static + Send {
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 
@@ -152,15 +152,13 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 ///
 /// TODO: check HTTP rules about weak vs strong comparisons with range requests. I don't think I'm
 /// doing this correctly.
-pub fn serve<D, E>(h: &reactor::Handle, e: D, req: &Request) -> FutureResult<Response, Error>
-where D: Deref<Target = E> + Send + 'static, E: Entity {
+pub fn serve<E: Entity>(remote: &reactor::Remote, e: E, req: &Request) -> Response {
     if *req.method() != Method::Get && *req.method() != Method::Head {
-        return future::ok(
-            Response::new()
+        return Response::new()
             .with_status(hyper::status::StatusCode::MethodNotAllowed)
             .with_header(header::ContentType(mime!(Text/Plain)))
             .with_header(header::Allow(vec![Method::Get, Method::Head]))
-            .with_body(&b"This resource only supports GET and HEAD."[..]));
+            .with_body(&b"This resource only supports GET and HEAD."[..]);
     }
 
     let last_modified = e.last_modified();
@@ -236,12 +234,12 @@ where D: Deref<Target = E> + Send + 'static, E: Entity {
 
     if precondition_failed {
         res.set_status(hyper::status::StatusCode::PreconditionFailed);
-        return future::ok(res.with_body(&b"Precondition failed"[..]))
+        return res.with_body(&b"Precondition failed"[..]);
     }
 
     if not_modified {
         res.set_status(hyper::status::StatusCode::NotModified);
-        return future::ok(res);
+        return res;
     }
 
     let len = e.len();
@@ -261,7 +259,8 @@ where D: Deref<Target = E> + Send + 'static, E: Entity {
                 // more than simply serving the whole entity, do that instead.
                 let est_len: u64 = rs.iter().map(|r| 80 + r.end - r.start).sum();
                 if est_len < len {
-                    return send_multipart(h, e, req, rs, len, include_entity_headers_on_range);
+                    return send_multipart(remote, e, req, res, rs, len,
+                                          include_entity_headers_on_range);
                 }
 
                 (0 .. len, true)
@@ -273,7 +272,7 @@ where D: Deref<Target = E> + Send + 'static, E: Entity {
                     range: None,
                     instance_length: Some(len)}));
             res.set_status(hyper::status::StatusCode::RangeNotSatisfiable);
-            return future::ok(res);
+            return res;
         }
     };
     if include_entity_headers {
@@ -281,15 +280,15 @@ where D: Deref<Target = E> + Send + 'static, E: Entity {
     }
     res.headers_mut().set(header::ContentLength(range.end - range.start));
     if *req.method() == Method::Head {
-        return future::ok(res);
+        return res;
     }
 
-    future::ok(res.with_body(e.get_range(range)))
+    res.with_body(e.get_range(range))
 }
 
-fn send_multipart<D, E>(h: &reactor::Handle, e: D, req: &Request, rs: SmallVec<[Range<u64>; 1]>,
-                        len: u64, include_entity_headers: bool) -> FutureResult<Response, Error>
-where D: Deref<Target = E> + Send + 'static, E: Entity {
+fn send_multipart<E: Entity>(remote: &reactor::Remote, e: E, req: &Request, mut res: Response,
+                             rs: SmallVec<[Range<u64>; 1]>, len: u64, include_entity_headers: bool)
+                             -> Response {
     let mut body_len = 0;
     let mut each_part_headers = Vec::with_capacity(128);
     if include_entity_headers {
@@ -311,13 +310,12 @@ where D: Deref<Target = E> + Send + 'static, E: Entity {
     const TRAILER: &'static [u8] = b"\r\n--B--\r\n";
     body_len += TRAILER.len() as u64;
 
-    let mut res = Response::new();
     res.headers_mut().set(header::ContentLength(body_len));
     res.headers_mut().set_raw("Content-Type", vec![b"multipart/byteranges; boundary=B".to_vec()]);
     res.set_status(hyper::status::StatusCode::PartialContent);
 
     if *req.method() == Method::Head {
-        return future::ok(res);
+        return res;
     }
 
     // Create bodies, a stream of ::hyper::Body structs as follows: each part's header and body
@@ -340,10 +338,12 @@ where D: Deref<Target = E> + Send + 'static, E: Entity {
     let (sink, body) = hyper::Body::pair();
     res.set_body(body);
     let flattened = bodies.flatten().then(|i| future::ok(i));
-    h.spawn(sink.send_all(flattened)
-                .map(|_| ())
-                .map_err(|_| ()));
-    future::ok(res)
+    let send = sink.send_all(flattened).map(|_| ()).map_err(|_| ());
+    match remote.handle() {
+        Some(h) => h.spawn(send),
+        None => remote.spawn(move |_h| send),
+    }
+    res
 }
 
 #[cfg(test)]

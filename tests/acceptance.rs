@@ -47,7 +47,7 @@ struct FakeEntity {
     last_modified: hyper::header::HttpDate,
 }
 
-impl http_entity::Entity for FakeEntity {
+impl http_entity::Entity for &'static FakeEntity {
     fn len(&self) -> u64 { BODY.len() as u64 }
     fn get_range(&self, range: Range<u64>) -> hyper::Body {
         BODY[range.start as usize .. range.end as usize].into()
@@ -74,8 +74,7 @@ impl hyper::server::Service for MyService {
             "/weak" => &*ENTITY_WEAK_ETAG,
             p => panic!("unexpected path {}", p),
         };
-        let h = self.0.handle().unwrap();
-        http_entity::serve(&h, entity, &req)
+        futures::future::ok(http_entity::serve(&self.0, entity, &req))
     }
 }
 
