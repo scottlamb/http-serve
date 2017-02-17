@@ -34,7 +34,7 @@
 extern crate futures;
 extern crate futures_cpupool;
 extern crate http_entity;
-extern crate http_entity_static;
+extern crate http_file;
 extern crate hyper;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate mime;
@@ -70,7 +70,7 @@ impl hyper::server::Service for MyService {
             let f = ::std::fs::File::open(FILE)?;
             let l = REACTOR.lock().unwrap();
             let r: &Remote = l.as_ref().unwrap();
-            let f = http_entity_static::File::new(f, POOL.clone(), r.clone(), mime!(Text/Plain))?;
+            let f = http_file::File::new(f, POOL.clone(), r.clone(), mime!(Text/Plain))?;
             Ok(http_entity::serve(r, f, &req))
         }).boxed()
     }

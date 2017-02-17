@@ -12,9 +12,9 @@ The API is in flight:
      intended to become hyper 0.11.x. The hyper API, and the http-entity API,
      are still unstable.
 
-# http-entity-static
+# http-file
 
-`http-entity-static` is a Rust crate which provides a `http_entity::Entity`
+`http-file` is a Rust crate which provides a `http_entity::Entity`
 for serving static files from the local filesystem.
 
 Try the example:

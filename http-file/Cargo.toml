@@ -1,5 +1,5 @@
 [package]
-name = "http-entity-static"
+name = "http-file"
 version = "0.0.1"
 authors = ["Scott Lamb <slamb@slamb.org>"]
 license = "MIT"
