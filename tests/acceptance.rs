@@ -26,16 +26,16 @@ extern crate http_entity;
 extern crate hyper;
 #[macro_use] extern crate mime;
 extern crate smallvec;
-extern crate tokio_core;
 
 extern crate env_logger;
 extern crate reqwest;
 
+use futures::Stream;
+use futures::stream::{self, BoxStream};
 use reqwest::header::{self, ByteRangeSpec, ContentRangeSpec, EntityTag};
 use reqwest::header::Range::Bytes;
 use std::io::Read;
 use std::ops::Range;
-use std::sync::Mutex;
 
 static BODY: &'static [u8] =
     b"01234567890123456789012345678901234567890123456789012345678901234567890123456789\
@@ -47,10 +47,10 @@ struct FakeEntity {
     last_modified: hyper::header::HttpDate,
 }
 
-impl http_entity::Entity for &'static FakeEntity {
+impl http_entity::Entity<BoxStream<Vec<u8>, hyper::Error>> for &'static FakeEntity {
     fn len(&self) -> u64 { BODY.len() as u64 }
-    fn get_range(&self, range: Range<u64>) -> hyper::Body {
-        BODY[range.start as usize .. range.end as usize].into()
+    fn get_range(&self, range: Range<u64>) -> BoxStream<Vec<u8>, hyper::Error> {
+        stream::once(Ok(BODY[range.start as usize .. range.end as usize].into())).boxed()
     }
     fn add_headers(&self, headers: &mut ::hyper::header::Headers) {
         headers.set(::hyper::header::ContentType(mime!(Application/OctetStream)));
@@ -59,13 +59,15 @@ impl http_entity::Entity for &'static FakeEntity {
     fn last_modified(&self) -> Option<hyper::header::HttpDate> { Some(self.last_modified) }
 }
 
-struct MyService(::tokio_core::reactor::Remote);
+struct MyService;
 
 impl hyper::server::Service for MyService {
     type Request = hyper::server::Request;
-    type Response = hyper::server::Response;
+    type Response = hyper::server::Response<BoxStream<Vec<u8>, hyper::Error>>;
     type Error = hyper::Error;
-    type Future = ::futures::future::FutureResult<hyper::server::Response, hyper::Error>;
+    type Future = ::futures::future::FutureResult<
+        hyper::server::Response<BoxStream<Vec<u8>, hyper::Error>>,
+        hyper::Error>;
 
     fn call(&self, req: hyper::server::Request) -> Self::Future {
         let entity: &'static FakeEntity = match req.uri().path() {
@@ -74,7 +76,7 @@ impl hyper::server::Service for MyService {
             "/weak" => &*ENTITY_WEAK_ETAG,
             p => panic!("unexpected path {}", p),
         };
-        futures::future::ok(http_entity::serve(&self.0, entity, &req))
+        futures::future::ok(http_entity::serve(entity, &req))
     }
 }
 
@@ -84,12 +86,9 @@ fn new_server() -> String {
         let addr = "127.0.0.1:0".parse().unwrap();
         let server = hyper::server::Http::new().bind(&addr, || {
             info!("creating a service");
-            let handle = REACTOR.lock().unwrap().as_ref().unwrap().clone();
-            Ok(MyService(handle))
+            Ok(MyService)
         }).unwrap();
         let addr = server.local_addr().unwrap();
-        let handle = server.handle();
-        *REACTOR.lock().unwrap() = Some(handle.remote().clone());
         tx.send(addr).unwrap();
         server.run().unwrap()
     });
@@ -116,7 +115,6 @@ lazy_static! {
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
     static ref SERVER: String = { new_server() };
-    static ref REACTOR: Mutex<Option<::tokio_core::reactor::Remote>> = { Mutex::new(None) };
 }
 
 #[test]

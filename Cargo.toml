@@ -10,7 +10,6 @@ hyper = { git = "https://github.com/hyperium/hyper" }
 mime = "0.2"
 smallvec = "0.3"
 time = "0.1"
-tokio-core = "0.1"
 
 [dev-dependencies]
 env_logger = "0.4"

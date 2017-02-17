@@ -31,6 +31,7 @@
 //! $ curl -v -H 'Range: bytes=1-10,30-40' http://127.0.0.1:1337/
 //! ```
 
+extern crate env_logger;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate http_entity;
@@ -38,17 +39,15 @@ extern crate http_file;
 extern crate hyper;
 #[macro_use] extern crate lazy_static;
 #[macro_use] extern crate mime;
-extern crate tokio_core;
 
+use hyper::Error;
 use hyper::server::{Request, Response};
 use futures::Future;
+use futures::stream::BoxStream;
 use futures_cpupool::CpuPool;
-use std::sync::Mutex;
-use tokio_core::reactor::Remote;
 
 lazy_static! {
     static ref POOL: CpuPool = CpuPool::new(1);
-    static ref REACTOR: Mutex<Option<Remote>> = { Mutex::new(None) };
 }
 
 static FILE: &'static str = "/usr/share/dict/words";
@@ -57,9 +56,9 @@ struct MyService;
 
 impl hyper::server::Service for MyService {
     type Request = Request;
-    type Response = Response;
-    type Error = hyper::Error;
-    type Future = ::futures::BoxFuture<Response, hyper::Error>;
+    type Response = Response<BoxStream<Vec<u8>, Error>>;
+    type Error = Error;
+    type Future = ::futures::future::BoxFuture<Response<BoxStream<Vec<u8>, Error>>, Error>;
 
     fn call(&self, req: Request) -> Self::Future {
         if req.path() != "/" {
@@ -68,19 +67,16 @@ impl hyper::server::Service for MyService {
         }
         POOL.spawn_fn(move || {
             let f = ::std::fs::File::open(FILE)?;
-            let l = REACTOR.lock().unwrap();
-            let r: &Remote = l.as_ref().unwrap();
-            let f = http_file::File::new(f, POOL.clone(), r.clone(), mime!(Text/Plain))?;
-            Ok(http_entity::serve(r, f, &req))
+            let f = http_file::ChunkedReadFile::new(f, POOL.clone(), mime!(Text/Plain))?;
+            Ok(http_entity::serve(f, &req))
         }).boxed()
     }
 }
 
 fn main() {
+    env_logger::init().unwrap();
     let addr = "127.0.0.1:1337".parse().unwrap();
     let server = hyper::server::Http::new().bind(&addr, || Ok(MyService)).unwrap();
-    let handle = server.handle();
-    *REACTOR.lock().unwrap() = Some(handle.remote().clone());
     println!("Serving {} on http://{} with 1 thread.", FILE, server.local_addr().unwrap());
     server.run().unwrap();
 }

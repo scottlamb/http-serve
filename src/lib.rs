@@ -24,9 +24,9 @@ extern crate hyper;
 #[macro_use] extern crate mime;
 extern crate smallvec;
 extern crate time;
-extern crate tokio_core;
 
-use futures::{Future, Stream, Sink};
+use futures::Stream;
+use futures::stream::{self, BoxStream};
 use futures::future;
 use hyper::Error;
 use hyper::server::{Request, Response};
@@ -36,15 +36,14 @@ use smallvec::SmallVec;
 use std::cmp;
 use std::io::Write;
 use std::ops::Range;
-use tokio_core::reactor;
 
 /// An HTTP entity for GET and HEAD serving.
-pub trait Entity : 'static + Send {
+pub trait Entity<B>: 'static + Send {
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 
     /// Gets the bytes indicated by `range`.
-    fn get_range(&self, range: Range<u64>) -> hyper::Body;
+    fn get_range(&self, range: Range<u64>) -> B;
 
     /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
     /// In particular, these headers are the "other entity-headers" described by [RFC 2616 section
@@ -144,21 +143,20 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 /// The caller is expected to have already determined the correct resource and appended
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
 ///
-/// `e` can be any of the following:
-///
-///    * `&'static SomeEntity`
-///    * `Box<SomeEntity>`
-///    * `Arc<SomeEntity>`
-///
 /// TODO: check HTTP rules about weak vs strong comparisons with range requests. I don't think I'm
 /// doing this correctly.
-pub fn serve<E: Entity>(remote: &reactor::Remote, e: E, req: &Request) -> Response {
+pub fn serve<E, B, C>(e: E, req: &Request) -> Response<B>
+where E: Entity<B>,
+      B: 'static + Send + Stream<Item = C, Error = Error> + From<BoxStream<C, Error>>,
+      C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]> {
     if *req.method() != Method::Get && *req.method() != Method::Head {
+        let body: BoxStream<C, Error> =
+            stream::once(Ok(b"This resource only supports GET and HEAD."[..].into())).boxed();
         return Response::new()
             .with_status(hyper::status::StatusCode::MethodNotAllowed)
             .with_header(header::ContentType(mime!(Text/Plain)))
             .with_header(header::Allow(vec![Method::Get, Method::Head]))
-            .with_body(&b"This resource only supports GET and HEAD."[..]);
+            .with_body(body);
     }
 
     let last_modified = e.last_modified();
@@ -234,7 +232,7 @@ pub fn serve<E: Entity>(remote: &reactor::Remote, e: E, req: &Request) -> Respon
 
     if precondition_failed {
         res.set_status(hyper::status::StatusCode::PreconditionFailed);
-        return res.with_body(&b"Precondition failed"[..]);
+        return res.with_body(stream::once(Ok(b"Precondition failed"[..].into())).boxed());
     }
 
     if not_modified {
@@ -259,8 +257,7 @@ pub fn serve<E: Entity>(remote: &reactor::Remote, e: E, req: &Request) -> Respon
                 // more than simply serving the whole entity, do that instead.
                 let est_len: u64 = rs.iter().map(|r| 80 + r.end - r.start).sum();
                 if est_len < len {
-                    return send_multipart(remote, e, req, res, rs, len,
-                                          include_entity_headers_on_range);
+                    return send_multipart(e, req, res, rs, len, include_entity_headers_on_range);
                 }
 
                 (0 .. len, true)
@@ -286,9 +283,28 @@ pub fn serve<E: Entity>(remote: &reactor::Remote, e: E, req: &Request) -> Respon
     res.with_body(e.get_range(range))
 }
 
-fn send_multipart<E: Entity>(remote: &reactor::Remote, e: E, req: &Request, mut res: Response,
-                             rs: SmallVec<[Range<u64>; 1]>, len: u64, include_entity_headers: bool)
-                             -> Response {
+enum InnerBody<B, C> {
+    Once(Option<C>),
+    B(B),
+}
+
+impl<B, C> Stream for InnerBody<B, C> where B: Stream<Item = C, Error = Error> {
+    type Item = C;
+    type Error = Error;
+    fn poll(&mut self) -> ::futures::Poll<Option<C>, Error> {
+        match self {
+            &mut InnerBody::Once(ref mut o) => Ok(futures::Async::Ready(o.take())),
+            &mut InnerBody::B(ref mut b) => b.poll(),
+        }
+    }
+}
+
+fn send_multipart<E, B, C>(e: E, req: &Request, mut res: Response<B>,
+                           rs: SmallVec<[Range<u64>; 1]>, len: u64, include_entity_headers: bool)
+                           -> Response<B>
+where E: Entity<B>,
+      B: 'static + Send + Stream<Item = C, Error = Error> + From<BoxStream<C, Error>>,
+      C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]> {
     let mut body_len = 0;
     let mut each_part_headers = Vec::with_capacity(128);
     if include_entity_headers {
@@ -323,26 +339,20 @@ fn send_multipart<E: Entity>(remote: &reactor::Remote, e: E, req: &Request, mut 
     let bodies = ::futures::stream::unfold(0, move |state| {
         let i = state >> 1;
         let odd = (state & 1) == 1;
-        if i == rs.len() && odd {
-            None
+        let body = if i == rs.len() && odd {
+            return None;
         } else if i == rs.len() {
-            Some(future::ok::<_, Error>((TRAILER.into(), state + 1)))
+            InnerBody::Once(Some(TRAILER.into()))
         } else if odd {
-            Some(future::ok((e.get_range(rs[i].clone()), state + 1)))
+            InnerBody::B(e.get_range(rs[i].clone()))
         } else {
-            Some(future::ok((::std::mem::replace(&mut part_headers[i], Vec::new()).into(),
-                             state + 1)))
-        }
+            let v = ::std::mem::replace(&mut part_headers[i], Vec::new());
+            InnerBody::Once(Some(v.into()))
+        };
+        Some(future::ok::<_, Error>((body, state + 1)))
     });
 
-    let (sink, body) = hyper::Body::pair();
-    res.set_body(body);
-    let flattened = bodies.flatten().then(|i| future::ok(i));
-    let send = sink.send_all(flattened).map(|_| ()).map_err(|_| ());
-    match remote.handle() {
-        Some(h) => h.spawn(send),
-        None => remote.spawn(move |_h| send),
-    }
+    res.set_body(bodies.flatten().boxed());
     res
 }
 
