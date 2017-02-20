@@ -21,3 +21,6 @@ reqwest = "0.3.0"
 
 [workspace]
 members = ["http-file"]
+
+[profile.release]
+debug = true

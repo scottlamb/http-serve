@@ -20,7 +20,7 @@ for serving static files from the local filesystem.
 Try the example:
 
 ```
-$ cargo run --example serve_words
+$ cargo run --example serve_file /usr/share/dict/words
 ```
 
 ## Author

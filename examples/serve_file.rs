@@ -19,7 +19,7 @@
 // OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 // SOFTWARE.
 
-//! Test program which serves `/usr/share/dict/words` on `http://127.0.0.1:1337/`.
+//! Test program which serves a local file on `http://127.0.0.1:1337/`.
 //!
 //! Performs file IO on a separate thread pool from the reactor so that it doesn't block on
 //! local disk. Supports HEAD, conditional GET, and byte range requests. Some commands to try:
@@ -37,7 +37,6 @@ extern crate futures_cpupool;
 extern crate http_entity;
 extern crate http_file;
 extern crate hyper;
-#[macro_use] extern crate lazy_static;
 #[macro_use] extern crate mime;
 
 use hyper::Error;
@@ -46,13 +45,12 @@ use futures::Future;
 use futures::stream::BoxStream;
 use futures_cpupool::CpuPool;
 
-lazy_static! {
-    static ref POOL: CpuPool = CpuPool::new(1);
+struct Context {
+    path: ::std::ffi::OsString,
+    pool: CpuPool,
 }
 
-static FILE: &'static str = "/usr/share/dict/words";
-
-struct MyService;
+struct MyService(&'static Context);
 
 impl hyper::server::Service for MyService {
     type Request = Request;
@@ -65,18 +63,43 @@ impl hyper::server::Service for MyService {
             let resp = Response::new().with_status(hyper::StatusCode::NotFound);
             return futures::future::ok(resp).boxed();
         }
-        POOL.spawn_fn(move || {
-            let f = ::std::fs::File::open(FILE)?;
-            let f = http_file::ChunkedReadFile::new(f, POOL.clone(), mime!(Text/Plain))?;
+        let ctx = self.0;
+        ctx.pool.spawn_fn(move || {
+            let f = ::std::fs::File::open(&ctx.path)?;
+            let f = http_file::ChunkedReadFile::new(f, ctx.pool.clone(), mime!(Text/Plain))?;
             Ok(http_entity::serve(f, &req))
         }).boxed()
     }
 }
 
+/// Leaks a given owned object, returning a reference with the static lifetime.
+/// This can save dealing with reference-counting, lazy statics, or mutexes.
+fn leak<T: ?Sized>(b: Box<T>) -> &'static T {
+    unsafe {
+        let r = ::std::mem::transmute(&*b);
+        ::std::mem::forget(b);
+        r
+    }
+}
+
 fn main() {
+    let mut args = ::std::env::args_os();
+    if args.len() != 2 {
+        use ::std::io::Write;
+        writeln!(&mut std::io::stderr(), "Expected serve [FILENAME]").unwrap();
+        ::std::process::exit(1);
+    }
+    let path = args.nth(1).unwrap();
+
+    let ctx = leak(Box::new(Context{
+        path: path,
+        pool: CpuPool::new(1),
+    }));
+
     env_logger::init().unwrap();
     let addr = "127.0.0.1:1337".parse().unwrap();
-    let server = hyper::server::Http::new().bind(&addr, || Ok(MyService)).unwrap();
-    println!("Serving {} on http://{} with 1 thread.", FILE, server.local_addr().unwrap());
+    let server = hyper::server::Http::new().bind(&addr, move || Ok(MyService(ctx))).unwrap();
+    println!("Serving {} on http://{} with 1 thread.",
+             ctx.path.to_string_lossy(), server.local_addr().unwrap());
     server.run().unwrap();
 }
