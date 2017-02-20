@@ -28,7 +28,7 @@ extern crate libc;
 extern crate mime;
 extern crate time;
 
-use futures::{Future, Sink, Stream};
+use futures::{Sink, Stream};
 use futures::stream::BoxStream;
 use futures_cpupool::CpuPool;
 use http_entity::Entity;
@@ -120,9 +120,8 @@ where B: 'static + Send + From<BoxStream<C, Error>>,
         let stream = match self.inner.pool {
             Some(ref p) => {
                 let (snd, rcv) = ::futures::sync::mpsc::channel(0);
-                p.spawn(snd.send_all(stream.then(|i| Ok(i)))
-                           .map(|_| ())
-                           .map_err(|_| ())).forget();
+                p.spawn(snd.send_all(stream.then(|i| Ok(i))))
+                 .forget();
                 rcv.map_err(|()| hyper::Error::Incomplete)
                    .and_then(|r| ::futures::future::result(r))
                    .boxed()
