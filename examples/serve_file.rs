@@ -66,7 +66,7 @@ impl hyper::server::Service for MyService {
         let ctx = self.0;
         ctx.pool.spawn_fn(move || {
             let f = ::std::fs::File::open(&ctx.path)?;
-            let f = http_file::ChunkedReadFile::new(f, ctx.pool.clone(), mime!(Text/Plain))?;
+            let f = http_file::ChunkedReadFile::new(f, Some(ctx.pool.clone()), mime!(Text/Plain))?;
             Ok(http_entity::serve(f, &req))
         }).boxed()
     }

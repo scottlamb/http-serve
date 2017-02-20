@@ -28,7 +28,7 @@ extern crate libc;
 extern crate mime;
 extern crate time;
 
-use futures::Stream;
+use futures::{Future, Sink, Stream};
 use futures::stream::BoxStream;
 use futures_cpupool::CpuPool;
 use http_entity::Entity;
@@ -52,9 +52,9 @@ struct ChunkedReadFileInner {
     inode: u64,
     mtime: i64,
     mtime_nsec: i64,
-    f: std::fs::File,
-    pool: CpuPool,
     content_type: ::mime::Mime,
+    f: std::fs::File,
+    pool: Option<CpuPool>,
 }
 
 impl<B, C> ChunkedReadFile<B, C> {
@@ -64,7 +64,7 @@ impl<B, C> ChunkedReadFile<B, C> {
     /// tokio reactor thread on local disk I/O. Note that `File::open` and this constructor
     /// (specifically, its call to `fstat(2)`) may also block, so they typically shouldn't be
     /// called on the tokio reactor either.
-    pub fn new(file: ::std::fs::File, pool: CpuPool, content_type: ::mime::Mime)
+    pub fn new(file: ::std::fs::File, pool: Option<CpuPool>, content_type: ::mime::Mime)
                -> Result<Self, Error> {
         let m = file.metadata()?;
         Ok(ChunkedReadFile{
@@ -73,9 +73,9 @@ impl<B, C> ChunkedReadFile<B, C> {
                 inode: m.ino(),
                 mtime: m.mtime(),
                 mtime_nsec: m.mtime_nsec(),
+                content_type: content_type,
                 f: file,
                 pool: pool,
-                content_type: content_type,
             }),
             phantom: ::std::marker::PhantomData,
         })
@@ -88,31 +88,48 @@ where B: 'static + Send + From<BoxStream<C, Error>>,
     fn len(&self) -> u64 { self.inner.len }
 
     fn get_range(&self, range: Range<u64>) -> B {
-        // Tell the operating system that this fd will be used to read the given range sequentially.
-        // This may encourage it to do readahead.
-        let fadvise_ret = unsafe {
-            ::libc::posix_fadvise(self.inner.f.as_raw_fd(), range.start as i64,
-                                  (range.end - range.start) as i64, libc::POSIX_FADV_SEQUENTIAL)
-        };
-        if fadvise_ret != 0 {
-            warn!("posix_fadvise failed: {}", ::std::io::Error::from_raw_os_error(fadvise_ret));
-        }
-
         // This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
         // a tradeoff between memory usage and thread handoffs.
         static CHUNK_SIZE: u64 = 65536;
-        ::futures::stream::unfold((range, self.inner.clone()), move |(left, inner)| {
-            if left.start == left.end { return None };
-            let p = inner.pool.clone();
-            Some(p.spawn_fn(move || {
-                let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
-                let mut chunk = Vec::with_capacity(chunk_size);
-                unsafe { chunk.set_len(chunk_size) };
-                let bytes_read = inner.f.read_at(&mut chunk, left.start)?;
-                chunk.truncate(bytes_read);
-                Ok((chunk.into(), (left.start + bytes_read as u64 .. left.end, inner)))
-            }))
-        }).boxed().into()
+
+        if range.end - range.start > CHUNK_SIZE {
+            // Tell the operating system that this fd will be used to read the given range
+            // sequentially. This may encourage it to do (more) readahead.
+            let fadvise_ret = unsafe {
+                ::libc::posix_fadvise(self.inner.f.as_raw_fd(), range.start as i64,
+                                      (range.end - range.start) as i64, libc::POSIX_FADV_SEQUENTIAL)
+            };
+            if fadvise_ret != 0 {
+                warn!("posix_fadvise failed: {}", ::std::io::Error::from_raw_os_error(fadvise_ret));
+            }
+        }
+
+        let stream = ::futures::stream::unfold((range, self.inner.clone()), move |(left, inner)| {
+            if left.start == left.end { return None }
+            let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
+            let mut chunk = Vec::with_capacity(chunk_size);
+            unsafe { chunk.set_len(chunk_size) };
+            let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
+                Err(e) => return Some(Err(e.into())),
+                Ok(b) => b,
+            };
+            chunk.truncate(bytes_read);
+            Some(Ok((chunk.into(), (left.start + bytes_read as u64 .. left.end, inner))))
+        });
+
+        let stream = match self.inner.pool {
+            Some(ref p) => {
+                let (snd, rcv) = ::futures::sync::mpsc::channel(0);
+                p.spawn(snd.send_all(stream.then(|i| Ok(i)))
+                           .map(|_| ())
+                           .map_err(|_| ())).forget();
+                rcv.map_err(|()| hyper::Error::Incomplete)
+                   .and_then(|r| ::futures::future::result(r))
+                   .boxed()
+            },
+            None => stream.boxed(),
+        };
+        stream.into()
     }
 
     fn add_headers(&self, h: &mut header::Headers) {
@@ -125,7 +142,8 @@ where B: 'static + Send + From<BoxStream<C, Error>>,
         // redundant but doesn't harm anything.
         Some(header::EntityTag::strong(format!("{:x}:{:x}:{:x}:{:x}", self.inner.inode,
                                                self.inner.len, self.inner.mtime,
-                                               self.inner.mtime_nsec))) }
+                                               self.inner.mtime_nsec)))
+    }
 
     fn last_modified(&self) -> Option<header::HttpDate> {
         Some(header::HttpDate(time::at_utc(time::Timespec{
