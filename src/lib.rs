@@ -34,7 +34,7 @@ use std::io::{self, Write};
 use std::ops::Range;
 
 /// An HTTP entity for GET and HEAD serving.
-pub trait Entity<Error> where Error: From<io::Error> {
+pub trait Entity<Error> {
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 

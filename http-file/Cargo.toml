@@ -1,0 +1,17 @@
+[package]
+name = "http-file"
+version = "0.0.1"
+authors = ["Scott Lamb <slamb@slamb.org>"]
+license = "MIT"
+readme = "../README.md"
+
+[lib]
+path = "lib.rs"
+
+[dependencies]
+http-entity = { path = ".." }
+hyper = "0.10"
+libc = "0.2.20"
+log = "0.3"
+mime = "0.2"
+time = "0.1"
