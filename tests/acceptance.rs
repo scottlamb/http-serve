@@ -24,7 +24,6 @@ extern crate futures;
 #[macro_use] extern crate log;
 extern crate http_entity;
 extern crate hyper;
-#[macro_use] extern crate mime;
 extern crate smallvec;
 
 extern crate env_logger;
@@ -53,7 +52,7 @@ impl http_entity::Entity<BoxStream<Vec<u8>, hyper::Error>> for &'static FakeEnti
         stream::once(Ok(BODY[range.start as usize .. range.end as usize].into())).boxed()
     }
     fn add_headers(&self, headers: &mut ::hyper::header::Headers) {
-        headers.set(::hyper::header::ContentType(mime!(Application/OctetStream)));
+        headers.set(::hyper::header::ContentType(hyper::mime::APPLICATION_OCTET_STREAM));
     }
     fn etag(&self) -> Option<hyper::header::EntityTag> { self.etag.clone() }
     fn last_modified(&self) -> Option<hyper::header::HttpDate> { Some(self.last_modified) }
@@ -115,6 +114,7 @@ lazy_static! {
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
     static ref SERVER: String = { new_server() };
+    static ref MIME: reqwest::mime::Mime = { "application/octet-stream".parse().unwrap() };
 }
 
 #[test]
@@ -127,7 +127,7 @@ fn serve_without_etag() {
     // Full body.
     let mut resp = client.get(&url).send().unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -140,7 +140,7 @@ fn serve_without_etag() {
                          .send()
                          .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -173,7 +173,7 @@ fn serve_without_etag() {
               .send()
               .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -238,7 +238,7 @@ fn serve_without_etag() {
                          .unwrap();
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
@@ -280,7 +280,7 @@ fn serve_without_etag() {
                          .send()
                          .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -295,7 +295,7 @@ fn serve_without_etag() {
               .send()
               .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -316,7 +316,7 @@ fn serve_with_strong_etag() {
                          .send()
                          .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -330,7 +330,7 @@ fn serve_with_strong_etag() {
               .send()
               .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -394,7 +394,7 @@ fn serve_with_strong_etag() {
               .send()
               .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -415,7 +415,7 @@ fn serve_with_weak_etag() {
                          .send()
                          .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();
@@ -462,7 +462,7 @@ fn serve_with_weak_etag() {
               .send()
               .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, *resp.status());
-    assert_eq!(Some(&header::ContentType(mime!(Application/OctetStream))),
+    assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
     assert_eq!(None, resp.headers().get::<header::ContentRange>());
     buf.clear();

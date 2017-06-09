@@ -26,7 +26,6 @@ extern crate http_entity;
 extern crate hyper;
 extern crate libc;
 extern crate mime;
-extern crate time;
 
 use futures::{Sink, Stream};
 use futures::stream::BoxStream;
@@ -38,6 +37,7 @@ use std::ops::Range;
 use std::os::unix::io::AsRawFd;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Arc;
+use std::time::{self, SystemTime};
 
 /// A HTTP entity created from a `std::fs::File` which reads the file
 /// chunk-by-chunk on a CpuPool.
@@ -50,8 +50,7 @@ pub struct ChunkedReadFile<B, C> {
 struct ChunkedReadFileInner {
     len: u64,
     inode: u64,
-    mtime: i64,
-    mtime_nsec: i64,
+    mtime: SystemTime,
     content_type: ::mime::Mime,
     f: std::fs::File,
     pool: Option<CpuPool>,
@@ -71,8 +70,7 @@ impl<B, C> ChunkedReadFile<B, C> {
             inner: Arc::new(ChunkedReadFileInner{
                 len: m.len(),
                 inode: m.ino(),
-                mtime: m.mtime(),
-                mtime_nsec: m.mtime_nsec(),
+                mtime: m.modified()?,
                 content_type: content_type,
                 f: file,
                 pool: pool,
@@ -136,18 +134,13 @@ where B: 'static + Send + From<BoxStream<C, Error>>,
     }
 
     fn etag(&self) -> Option<header::EntityTag> {
-        // This etag format is similar to Apache's, with more mtime precision.
-        // The etag should change if the file is modified or replaced. The length is probably
-        // redundant but doesn't harm anything.
+        // This etag format is similar to Apache's. The etag should change if the file is modified
+        // or replaced. The length is probably redundant but doesn't harm anything.
+        let dur = self.inner.mtime.duration_since(time::UNIX_EPOCH)
+            .expect("modification time must be after epoch");
         Some(header::EntityTag::strong(format!("{:x}:{:x}:{:x}:{:x}", self.inner.inode,
-                                               self.inner.len, self.inner.mtime,
-                                               self.inner.mtime_nsec)))
+                                               self.inner.len, dur.as_secs(), dur.subsec_nanos())))
     }
 
-    fn last_modified(&self) -> Option<header::HttpDate> {
-        Some(header::HttpDate(time::at_utc(time::Timespec{
-            sec: self.inner.mtime,
-            nsec: self.inner.mtime_nsec as i32,
-        })))
-    }
+    fn last_modified(&self) -> Option<header::HttpDate> { Some(self.inner.mtime.into()) }
 }

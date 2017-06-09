@@ -21,7 +21,7 @@
 
 extern crate futures;
 extern crate hyper;
-#[macro_use] extern crate mime;
+extern crate mime;
 extern crate smallvec;
 extern crate time;
 
@@ -36,6 +36,7 @@ use smallvec::SmallVec;
 use std::cmp;
 use std::io::Write;
 use std::ops::Range;
+use std::time::SystemTime;
 
 /// An HTTP entity for GET and HEAD serving.
 pub trait Entity<B>: 'static + Send {
@@ -154,7 +155,7 @@ where E: Entity<B>,
             stream::once(Ok(b"This resource only supports GET and HEAD."[..].into())).boxed();
         return Response::new()
             .with_status(hyper::status::StatusCode::MethodNotAllowed)
-            .with_header(header::ContentType(mime!(Text/Plain)))
+            .with_header(header::ContentType(mime::TEXT_PLAIN))
             .with_header(header::Allow(vec![Method::Get, Method::Head]))
             .with_body(body);
     }
@@ -166,7 +167,7 @@ where E: Entity<B>,
         true
     } else if let (Some(ref m), Some(&header::IfUnmodifiedSince(ref since))) =
                   (last_modified, req.headers().get()) {
-        m.0.to_timespec() > since.0.to_timespec()
+        m > since
     } else { false };
 
     let not_modified = if !none_match(&etag, req) {
@@ -198,7 +199,8 @@ where E: Entity<B>,
                 // The to_timespec conversion appears necessary because in the If-Range off the
                 // wire, fields such as tm_yday are absent, causing strict equality to spuriously
                 // fail.
-                if if_date.0.to_timespec() != m.0.to_timespec() {
+                // TODO: necessary still?
+                if if_date != m {
                     range_hdr = None;
                     true
                 } else {
@@ -217,14 +219,14 @@ where E: Entity<B>,
     if let Some(m) = last_modified {
         // See RFC 2616 section 14.29: the Last-Modified must not exceed the Date. To guarantee
         // this, setet the Date now (if one hasn't already been set) rather than let hyper set it.
-        let d = if let Some(&header::Date(header::HttpDate(d))) = res.headers().get() {
+        let d = if let Some(&header::Date(d)) = res.headers().get() {
             d
         } else {
-            let d = time::now_utc();
-            res.headers_mut().set(header::Date(header::HttpDate(d)));
+            let d = SystemTime::now().into();
+            res.headers_mut().set(header::Date(d));
             d
         };
-        res.headers_mut().set(header::LastModified(::std::cmp::min(m, header::HttpDate(d))));
+        res.headers_mut().set(header::LastModified(::std::cmp::min(m, d)));
     }
     if let Some(e) = etag {
         res.headers_mut().set(header::ETag(e));

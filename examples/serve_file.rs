@@ -37,7 +37,7 @@ extern crate futures_cpupool;
 extern crate http_entity;
 extern crate http_file;
 extern crate hyper;
-#[macro_use] extern crate mime;
+extern crate mime;
 
 use hyper::{Error, StatusCode};
 use hyper::server::{Request, Response};
@@ -71,7 +71,7 @@ impl hyper::server::Service for MyService {
         let construction = move || {
             let f = ::std::fs::File::open(&ctx.path)?;
             let p = if pool_stream { Some(ctx.pool.clone()) } else { None };
-            let f = http_file::ChunkedReadFile::new(f, p, mime!(Text/Plain))?;
+            let f = http_file::ChunkedReadFile::new(f, p, mime::TEXT_PLAIN)?;
             Ok(http_entity::serve(f, &req))
         };
         if pool_constructor {

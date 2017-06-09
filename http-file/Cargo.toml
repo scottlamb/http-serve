@@ -15,5 +15,5 @@ http-entity = { path = ".." }
 hyper = { git = "https://github.com/hyperium/hyper" }
 libc = "0.2.20"
 log = "0.3"
-mime = "0.2"
+mime = "0.3"
 time = "0.1"
