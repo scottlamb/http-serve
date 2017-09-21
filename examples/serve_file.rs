@@ -21,7 +21,8 @@
 
 //! Test program which serves a local file on `http://127.0.0.1:1337/`.
 //!
-//! Supports HEAD, conditional GET, and byte range requests. Some commands to try:
+//! Performs file IO on a separate thread pool from the reactor so that it doesn't block on
+//! local disk. Supports HEAD, conditional GET, and byte range requests. Some commands to try:
 //!
 //! ```
 //! $ curl --head http://127.0.0.1/
@@ -31,34 +32,52 @@
 //! ```
 
 extern crate env_logger;
+extern crate futures;
+extern crate futures_cpupool;
 extern crate http_entity;
 extern crate http_file;
 extern crate hyper;
-#[macro_use] extern crate log;
-#[macro_use] extern crate mime;
+extern crate mime;
 
-use hyper::server;
-use std::io::Error;
+use hyper::{Error, StatusCode};
+use hyper::server::{Request, Response};
+use futures::Future;
+use futures::future;
+use futures::stream::BoxStream;
+use futures_cpupool::CpuPool;
 
 struct Context {
     path: ::std::ffi::OsString,
+    pool: CpuPool,
 }
 
-struct MyHandler(&'static Context);
+struct MyService(&'static Context);
 
-impl MyHandler {
-    fn handle_inner(&self, req: server::Request, res: server::Response) -> Result<(), Error> {
-        let f = ::std::fs::File::open(&self.0.path)?;
-        let f = http_file::ChunkedReadFile::new(f, mime!(Text/Plain))?;
-        http_entity::serve(&f, &req, res)?;
-        Ok(())
-    }
-}
+impl hyper::server::Service for MyService {
+    type Request = Request;
+    type Response = Response<BoxStream<Vec<u8>, Error>>;
+    type Error = Error;
+    type Future = future::BoxFuture<Response<BoxStream<Vec<u8>, Error>>, Error>;
 
-impl server::Handler for MyHandler {
-    fn handle(&self, req: server::Request, res: server::Response) {
-        if let Err(e) = self.handle_inner(req, res) {
-            error!("Error: {}", e);
+    fn call(&self, req: Request) -> Self::Future {
+        let (pool_constructor, pool_stream) = match req.path() {
+            "/" | "/inline-inline" => (false, false),
+            "/pool-inline" => (true, false),
+            "/inline-pool" => (false, true),
+            "/pool-pool" => (true, true),
+            _ => return future::ok(Response::new().with_status(StatusCode::NotFound)).boxed(),
+        };
+        let ctx = self.0;
+        let construction = move || {
+            let f = ::std::fs::File::open(&ctx.path)?;
+            let p = if pool_stream { Some(ctx.pool.clone()) } else { None };
+            let f = http_file::ChunkedReadFile::new(f, p, mime::TEXT_PLAIN)?;
+            Ok(http_entity::serve(f, &req))
+        };
+        if pool_constructor {
+            ctx.pool.spawn_fn(construction).boxed()
+        } else {
+            future::result(construction()).boxed()
         }
     }
 }
@@ -84,10 +103,13 @@ fn main() {
 
     let ctx = leak(Box::new(Context{
         path: path,
+        pool: CpuPool::new(1),
     }));
 
     env_logger::init().unwrap();
-    let server = server::Server::http("127.0.0.1:1337").unwrap();
-    let _guard = server.handle(MyHandler(ctx));
-    println!("Serving {} on http://127.0.0.1:1337", ctx.path.to_string_lossy());
+    let addr = "127.0.0.1:1337".parse().unwrap();
+    let server = hyper::server::Http::new().bind(&addr, move || Ok(MyService(ctx))).unwrap();
+    println!("Serving {} on http://{} with 1 thread.",
+             ctx.path.to_string_lossy(), server.local_addr().unwrap());
+    server.run().unwrap();
 }

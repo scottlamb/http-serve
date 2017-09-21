@@ -5,20 +5,22 @@ authors = ["Scott Lamb <slamb@slamb.org>"]
 license = "MIT"
 
 [dependencies]
-hyper = "0.10"
-mime = "0.2"
-smallvec = "0.3"
+futures = "0.1.7"
+hyper = "0.11"
+mime = "0.3"
+smallvec = "0.4"
 time = "0.1"
 
 [dev-dependencies]
 env_logger = "0.4"
+futures-cpupool = "0.1"
 http-file = { path = "./http-file" }
 lazy_static = "0.2"
 log = "0.3"
-reqwest = "0.3.0"
+reqwest = "0.7"
 
-[workspace]
-members = ["http-file"]
+#[workspace]
+#members = ["http-file"]
 
 [profile.release]
 debug = true
