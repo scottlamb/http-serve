@@ -80,9 +80,12 @@ impl<B, C> ChunkedReadFile<B, C> {
     }
 }
 
-impl<B, C> Entity<B> for ChunkedReadFile<B, C>
-where B: 'static + Send + From<BoxStream<C, Error>>,
-      C: 'static + Send + From<Vec<u8>> {
+impl<B, C> Entity for ChunkedReadFile<B, C>
+where B: 'static + Send + Stream<Item = C, Error = Error> + From<BoxStream<C, Error>>,
+      C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]> {
+    type Chunk = C;
+    type Body = B;
+
     fn len(&self) -> u64 { self.inner.len }
 
     fn get_range(&self, range: Range<u64>) -> B {

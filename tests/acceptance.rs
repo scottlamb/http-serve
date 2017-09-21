@@ -46,7 +46,10 @@ struct FakeEntity {
     last_modified: hyper::header::HttpDate,
 }
 
-impl http_entity::Entity<BoxStream<Vec<u8>, hyper::Error>> for &'static FakeEntity {
+impl http_entity::Entity for &'static FakeEntity {
+    type Chunk = Vec<u8>;
+    type Body = BoxStream<Self::Chunk, hyper::Error>;
+
     fn len(&self) -> u64 { BODY.len() as u64 }
     fn get_range(&self, range: Range<u64>) -> BoxStream<Vec<u8>, hyper::Error> {
         stream::once(Ok(BODY[range.start as usize .. range.end as usize].into())).boxed()

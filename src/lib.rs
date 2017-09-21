@@ -39,12 +39,21 @@ use std::ops::Range;
 use std::time::SystemTime;
 
 /// An HTTP entity for GET and HEAD serving.
-pub trait Entity<B>: 'static + Send {
+pub trait Entity: 'static + Send {
+    /// The type of a chunk. Commonly `::hyper::Chunk` or `Vec<u8>` but may be something more
+    /// exotic such as `::reffers::ARefs<'static, [u8]>` to minimize copying.
+    type Chunk: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]>;
+
+    /// The type of the body stream. Commonly
+    /// `::futures::stream::BoxStream<Self::Chunk, ::hyper::Error>`.
+    type Body: 'static + Send + Stream<Item = Self::Chunk, Error = Error> +
+               From<BoxStream<Self::Chunk, Error>>;
+
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 
     /// Gets the bytes indicated by `range`.
-    fn get_range(&self, range: Range<u64>) -> B;
+    fn get_range(&self, range: Range<u64>) -> Self::Body;
 
     /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
     /// In particular, these headers are the "other entity-headers" described by [RFC 2616 section
@@ -146,12 +155,9 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 ///
 /// TODO: check HTTP rules about weak vs strong comparisons with range requests. I don't think I'm
 /// doing this correctly.
-pub fn serve<E, B, C>(e: E, req: &Request) -> Response<B>
-where E: Entity<B>,
-      B: 'static + Send + Stream<Item = C, Error = Error> + From<BoxStream<C, Error>>,
-      C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]> {
+pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     if *req.method() != Method::Get && *req.method() != Method::Head {
-        let body: BoxStream<C, Error> =
+        let body: BoxStream<E::Chunk, Error> =
             stream::once(Ok(b"This resource only supports GET and HEAD."[..].into())).boxed();
         return Response::new()
             .with_status(hyper::status::StatusCode::MethodNotAllowed)
@@ -301,12 +307,9 @@ impl<B, C> Stream for InnerBody<B, C> where B: Stream<Item = C, Error = Error> {
     }
 }
 
-fn send_multipart<E, B, C>(e: E, req: &Request, mut res: Response<B>,
-                           rs: SmallVec<[Range<u64>; 1]>, len: u64, include_entity_headers: bool)
-                           -> Response<B>
-where E: Entity<B>,
-      B: 'static + Send + Stream<Item = C, Error = Error> + From<BoxStream<C, Error>>,
-      C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]> {
+fn send_multipart<E: Entity>(e: E, req: &Request, mut res: Response<E::Body>,
+                             rs: SmallVec<[Range<u64>; 1]>, len: u64, include_entity_headers: bool)
+                             -> Response<E::Body> {
     let mut body_len = 0;
     let mut each_part_headers = Vec::with_capacity(128);
     if include_entity_headers {
@@ -336,7 +339,7 @@ where E: Entity<B>,
         return res;
     }
 
-    // Create bodies, a stream of ::hyper::Body structs as follows: each part's header and body
+    // Create bodies, a stream of E::Body values as follows: each part's header and body
     // (the latter produced lazily), then the overall trailer.
     let bodies = ::futures::stream::unfold(0, move |state| {
         let i = state >> 1;
