@@ -12,7 +12,7 @@ path = "lib.rs"
 futures = "0.1.7"
 futures-cpupool = "0.1"
 http-entity = { path = ".." }
-hyper = { git = "https://github.com/hyperium/hyper" }
+hyper = "0.11.x"
 libc = "0.2.20"
 log = "0.3"
 mime = "0.3"

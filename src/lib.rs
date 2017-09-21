@@ -160,7 +160,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
         let body: BoxStream<E::Chunk, Error> =
             stream::once(Ok(b"This resource only supports GET and HEAD."[..].into())).boxed();
         return Response::new()
-            .with_status(hyper::status::StatusCode::MethodNotAllowed)
+            .with_status(hyper::StatusCode::MethodNotAllowed)
             .with_header(header::ContentType(mime::TEXT_PLAIN))
             .with_header(header::Allow(vec![Method::Get, Method::Head]))
             .with_body(body);
@@ -239,12 +239,12 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     }
 
     if precondition_failed {
-        res.set_status(hyper::status::StatusCode::PreconditionFailed);
+        res.set_status(hyper::StatusCode::PreconditionFailed);
         return res.with_body(stream::once(Ok(b"Precondition failed"[..].into())).boxed());
     }
 
     if not_modified {
-        res.set_status(hyper::status::StatusCode::NotModified);
+        res.set_status(hyper::StatusCode::NotModified);
         return res;
     }
 
@@ -257,7 +257,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
                     header::ContentRangeSpec::Bytes{
                         range: Some((rs[0].start, rs[0].end-1)),
                         instance_length: Some(len)}));
-                res.set_status(hyper::status::StatusCode::PartialContent);
+                res.set_status(hyper::StatusCode::PartialContent);
                 (rs[0].clone(), include_entity_headers_on_range)
             } else {
                 // Before serving multiple ranges via multipart/byteranges, estimate the total
@@ -276,7 +276,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
                 header::ContentRangeSpec::Bytes{
                     range: None,
                     instance_length: Some(len)}));
-            res.set_status(hyper::status::StatusCode::RangeNotSatisfiable);
+            res.set_status(hyper::StatusCode::RangeNotSatisfiable);
             return res;
         }
     };
@@ -333,7 +333,7 @@ fn send_multipart<E: Entity>(e: E, req: &Request, mut res: Response<E::Body>,
 
     res.headers_mut().set(header::ContentLength(body_len));
     res.headers_mut().set_raw("Content-Type", vec![b"multipart/byteranges; boundary=B".to_vec()]);
-    res.set_status(hyper::status::StatusCode::PartialContent);
+    res.set_status(hyper::StatusCode::PartialContent);
 
     if *req.method() == Method::Head {
         return res;
