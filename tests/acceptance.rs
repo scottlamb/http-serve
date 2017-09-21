@@ -30,11 +30,13 @@ extern crate env_logger;
 extern crate reqwest;
 
 use futures::Stream;
-use futures::stream::{self, BoxStream};
+use futures::stream;
 use reqwest::header::{self, ByteRangeSpec, ContentRangeSpec, EntityTag};
 use reqwest::header::Range::Bytes;
 use std::io::Read;
 use std::ops::Range;
+
+type Body = Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send>;
 
 static BODY: &'static [u8] =
     b"01234567890123456789012345678901234567890123456789012345678901234567890123456789\
@@ -48,11 +50,12 @@ struct FakeEntity {
 
 impl http_entity::Entity for &'static FakeEntity {
     type Chunk = Vec<u8>;
-    type Body = BoxStream<Self::Chunk, hyper::Error>;
+    type Body = Body;
 
     fn len(&self) -> u64 { BODY.len() as u64 }
-    fn get_range(&self, range: Range<u64>) -> BoxStream<Vec<u8>, hyper::Error> {
-        stream::once(Ok(BODY[range.start as usize .. range.end as usize].into())).boxed()
+    fn get_range(&self, range: Range<u64>)
+                 -> Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send> {
+        Box::new(stream::once(Ok(BODY[range.start as usize .. range.end as usize].into())))
     }
     fn add_headers(&self, headers: &mut ::hyper::header::Headers) {
         headers.set(::hyper::header::ContentType(hyper::mime::APPLICATION_OCTET_STREAM));
@@ -65,11 +68,9 @@ struct MyService;
 
 impl hyper::server::Service for MyService {
     type Request = hyper::server::Request;
-    type Response = hyper::server::Response<BoxStream<Vec<u8>, hyper::Error>>;
+    type Response = hyper::server::Response<Body>;
     type Error = hyper::Error;
-    type Future = ::futures::future::FutureResult<
-        hyper::server::Response<BoxStream<Vec<u8>, hyper::Error>>,
-        hyper::Error>;
+    type Future = ::futures::future::FutureResult<Self::Response, hyper::Error>;
 
     fn call(&self, req: hyper::server::Request) -> Self::Future {
         let entity: &'static FakeEntity = match req.uri().path() {

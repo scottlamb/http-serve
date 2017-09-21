@@ -26,7 +26,7 @@ extern crate smallvec;
 extern crate time;
 
 use futures::Stream;
-use futures::stream::{self, BoxStream};
+use futures::stream;
 use futures::future;
 use hyper::Error;
 use hyper::server::{Request, Response};
@@ -45,9 +45,9 @@ pub trait Entity: 'static + Send {
     type Chunk: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]>;
 
     /// The type of the body stream. Commonly
-    /// `::futures::stream::BoxStream<Self::Chunk, ::hyper::Error>`.
+    /// `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send>`.
     type Body: 'static + Send + Stream<Item = Self::Chunk, Error = Error> +
-               From<BoxStream<Self::Chunk, Error>>;
+               From<Box<Stream<Item = Self::Chunk, Error = Error> + Send>>;
 
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
@@ -157,8 +157,8 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 /// doing this correctly.
 pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     if *req.method() != Method::Get && *req.method() != Method::Head {
-        let body: BoxStream<E::Chunk, Error> =
-            stream::once(Ok(b"This resource only supports GET and HEAD."[..].into())).boxed();
+        let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> =
+            Box::new(stream::once(Ok(b"This resource only supports GET and HEAD."[..].into())));
         return Response::new()
             .with_status(hyper::StatusCode::MethodNotAllowed)
             .with_header(header::ContentType(mime::TEXT_PLAIN))
@@ -240,7 +240,9 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
 
     if precondition_failed {
         res.set_status(hyper::StatusCode::PreconditionFailed);
-        return res.with_body(stream::once(Ok(b"Precondition failed"[..].into())).boxed());
+        let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> =
+            Box::new(stream::once(Ok(b"Precondition failed"[..].into())));
+        return res.with_body(body);
     }
 
     if not_modified {
@@ -357,7 +359,8 @@ fn send_multipart<E: Entity>(e: E, req: &Request, mut res: Response<E::Body>,
         Some(future::ok::<_, Error>((body, state + 1)))
     });
 
-    res.set_body(bodies.flatten().boxed());
+    let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> = Box::new(bodies.flatten());
+    res.set_body(body);
     res
 }
 

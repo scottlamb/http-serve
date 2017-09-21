@@ -43,7 +43,7 @@ use hyper::{Error, StatusCode};
 use hyper::server::{Request, Response};
 use futures::Future;
 use futures::future;
-use futures::stream::BoxStream;
+use futures::stream::Stream;
 use futures_cpupool::CpuPool;
 
 struct Context {
@@ -55,9 +55,9 @@ struct MyService(&'static Context);
 
 impl hyper::server::Service for MyService {
     type Request = Request;
-    type Response = Response<BoxStream<Vec<u8>, Error>>;
+    type Response = Response<Box<Stream<Item = Vec<u8>, Error = Error> + Send>>;
     type Error = Error;
-    type Future = future::BoxFuture<Response<BoxStream<Vec<u8>, Error>>, Error>;
+    type Future = Box<Future<Item = Self::Response, Error = Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
         let (pool_constructor, pool_stream) = match req.path() {
@@ -65,7 +65,7 @@ impl hyper::server::Service for MyService {
             "/pool-inline" => (true, false),
             "/inline-pool" => (false, true),
             "/pool-pool" => (true, true),
-            _ => return future::ok(Response::new().with_status(StatusCode::NotFound)).boxed(),
+            _ => return Box::new(future::ok(Response::new().with_status(StatusCode::NotFound))),
         };
         let ctx = self.0;
         let construction = move || {
@@ -75,9 +75,9 @@ impl hyper::server::Service for MyService {
             Ok(http_entity::serve(f, &req))
         };
         if pool_constructor {
-            ctx.pool.spawn_fn(construction).boxed()
+            Box::new(ctx.pool.spawn_fn(construction))
         } else {
-            future::result(construction()).boxed()
+            Box::new(future::result(construction()))
         }
     }
 }
