@@ -23,8 +23,6 @@ extern crate futures;
 extern crate futures_cpupool;
 extern crate http_entity;
 extern crate hyper;
-extern crate libc;
-#[cfg(target_os="linux")] #[macro_use] extern crate log;
 extern crate mime;
 
 use futures::{Sink, Stream};
@@ -92,7 +90,6 @@ where B: 'static + Send + Stream<Item = C, Error = hyper::Error> +
     fn len(&self) -> u64 { self.inner.len }
 
     fn get_range(&self, range: Range<u64>) -> B {
-        maybe_fadvise(&self.inner.f, &range);
         let stream = ::futures::stream::unfold((range, self.inner.clone()), move |(left, inner)| {
             if left.start == left.end { return None }
             let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
@@ -134,25 +131,3 @@ where B: 'static + Send + Stream<Item = C, Error = hyper::Error> +
 
     fn last_modified(&self) -> Option<header::HttpDate> { Some(self.inner.mtime.into()) }
 }
-
-#[cfg(target_os="linux")]
-#[inline(always)]
-fn maybe_fadvise(f: &std::fs::File, range: &Range<u64>) {
-    use std::os::unix::io::AsRawFd;
-    if range.end - range.start <= CHUNK_SIZE {
-        return;
-    }
-    // Tell the operating system that this fd will be used to read the given range
-    // sequentially. This may encourage it to do (more) readahead.
-    let fadvise_ret = unsafe {
-        ::libc::posix_fadvise(f.as_raw_fd(), range.start as i64,
-                              (range.end - range.start) as i64, libc::POSIX_FADV_SEQUENTIAL)
-    };
-    if fadvise_ret != 0 {
-        warn!("posix_fadvise failed: {}", ::std::io::Error::from_raw_os_error(fadvise_ret));
-    }
-}
-
-#[cfg(not(target_os="linux"))]
-#[inline(always)]
-fn maybe_fadvise(_f: &std::fs::File, _range: &Range<u64>) {}
