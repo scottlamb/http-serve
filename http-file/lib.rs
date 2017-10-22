@@ -30,8 +30,8 @@ extern crate mime;
 use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
 use http_entity::Entity;
-use hyper::Error;
 use hyper::header;
+use std::io;
 use std::ops::Range;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Arc;
@@ -66,7 +66,7 @@ impl<B, C> ChunkedReadFile<B, C> {
     /// (specifically, its call to `fstat(2)`) may also block, so they typically shouldn't be
     /// called on the tokio reactor either.
     pub fn new(file: ::std::fs::File, pool: Option<CpuPool>, content_type: ::mime::Mime)
-               -> Result<Self, Error> {
+               -> Result<Self, io::Error> {
         let m = file.metadata()?;
         Ok(ChunkedReadFile{
             inner: Arc::new(ChunkedReadFileInner{
@@ -83,8 +83,8 @@ impl<B, C> ChunkedReadFile<B, C> {
 }
 
 impl<B, C> Entity for ChunkedReadFile<B, C>
-where B: 'static + Send + Stream<Item = C, Error = Error> +
-         From<Box<Stream<Item = C, Error = Error> + Send>>,
+where B: 'static + Send + Stream<Item = C, Error = hyper::Error> +
+         From<Box<Stream<Item = C, Error = hyper::Error> + Send>>,
       C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]> {
     type Chunk = C;
     type Body = B;
@@ -106,12 +106,12 @@ where B: 'static + Send + Stream<Item = C, Error = Error> +
             Some(Ok((chunk.into(), (left.start + bytes_read as u64 .. left.end, inner))))
         });
 
-        let stream: Box<Stream<Item = C, Error = Error> + Send> = match self.inner.pool {
+        let stream: Box<Stream<Item = C, Error = hyper::Error> + Send> = match self.inner.pool {
             Some(ref p) => {
                 let (snd, rcv) = ::futures::sync::mpsc::channel(0);
                 p.spawn(snd.send_all(stream.then(|i| Ok(i))))
                  .forget();
-                Box::new(rcv.map_err(|()| hyper::Error::Incomplete)
+                Box::new(rcv.map_err(|()| unreachable!())
                             .and_then(|r| ::futures::future::result(r)))
             },
             None => Box::new(stream),
