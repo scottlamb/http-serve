@@ -124,12 +124,12 @@ lazy_static! {
 #[test]
 fn serve_without_etag() {
     let _ = env_logger::init();
-    let client = reqwest::Client::new().unwrap();
+    let client = reqwest::Client::new();
     let mut buf = Vec::new();
     let url = format!("{}/none", *SERVER);
 
     // Full body.
-    let mut resp = client.get(&url).unwrap().send().unwrap();
+    let mut resp = client.get(&url).send().unwrap();
     assert_eq!(reqwest::StatusCode::Ok, resp.status());
     assert_eq!(Some(&header::ContentType(MIME.clone())),
                resp.headers().get::<header::ContentType>());
@@ -140,7 +140,6 @@ fn serve_without_etag() {
 
     // If-Match any should still send the full body.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(header::IfMatch::Any)
                          .send()
                          .unwrap();
@@ -155,7 +154,6 @@ fn serve_without_etag() {
     // If-Match by etag doesn't match (as this request has no etag).
     let resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfMatch::Items(vec![EntityTag::strong("foo".to_owned())]))
               .send()
               .unwrap();
@@ -163,7 +161,6 @@ fn serve_without_etag() {
 
     // If-None-Match any.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(header::IfNoneMatch::Any)
                          .send()
                          .unwrap();
@@ -176,7 +173,6 @@ fn serve_without_etag() {
     // If-None-Match by etag doesn't match (as this request has no etag).
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfNoneMatch::Items(vec![EntityTag::strong("foo".to_owned())]))
               .send()
               .unwrap();
@@ -190,7 +186,6 @@ fn serve_without_etag() {
 
     // Unmodified since supplied date.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(header::IfModifiedSince(*SOME_DATE))
                          .send()
                          .unwrap();
@@ -202,7 +197,6 @@ fn serve_without_etag() {
 
     // Range serving - basic case.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
                          .send()
                          .unwrap();
@@ -217,7 +211,6 @@ fn serve_without_etag() {
 
     // Range serving - multiple ranges.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(Bytes(vec![ByteRangeSpec::FromTo(0, 1),
                                             ByteRangeSpec::FromTo(3, 4)]))
                          .send()
@@ -243,7 +236,6 @@ fn serve_without_etag() {
 
     // Range serving - multiple ranges which are less efficient than sending the whole.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(Bytes(vec![ByteRangeSpec::FromTo(0, 100),
                                             ByteRangeSpec::FromTo(120, 240)]))
                          .send()
@@ -258,7 +250,6 @@ fn serve_without_etag() {
 
     // Range serving - not satisfiable.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(Bytes(vec![ByteRangeSpec::AllFrom(500)]))
                          .send()
                          .unwrap();
@@ -273,7 +264,6 @@ fn serve_without_etag() {
 
     // Range serving - matching If-Range by date honors the range.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
                          .header(header::IfRange::Date(*SOME_DATE))
                          .send()
@@ -289,7 +279,6 @@ fn serve_without_etag() {
 
     // Range serving - non-matching If-Range by date ignores the range.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
                          .header(header::IfRange::Date(*LATER_DATE))
                          .send()
@@ -305,7 +294,6 @@ fn serve_without_etag() {
     // Range serving - this resource has no etag, so any If-Range by etag ignores the range.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
               .header(header::IfRange::EntityTag(EntityTag::strong("foo".to_owned())))
               .send()
@@ -322,13 +310,12 @@ fn serve_without_etag() {
 #[test]
 fn serve_with_strong_etag() {
     let _ = env_logger::init();
-    let client = reqwest::Client::new().unwrap();
+    let client = reqwest::Client::new();
     let mut buf = Vec::new();
     let url = format!("{}/strong", *SERVER);
 
     // If-Match any should still send the full body.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(header::IfMatch::Any)
                          .send()
                          .unwrap();
@@ -343,7 +330,6 @@ fn serve_with_strong_etag() {
     // If-Match by matching etag should send the full body.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfMatch::Items(vec![EntityTag::strong("foo".to_owned())]))
               .send()
               .unwrap();
@@ -358,7 +344,6 @@ fn serve_with_strong_etag() {
     // If-Match by etag which doesn't match.
     let resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfMatch::Items(vec![EntityTag::strong("bar".to_owned())]))
               .send()
               .unwrap();
@@ -367,7 +352,6 @@ fn serve_with_strong_etag() {
     // If-None-Match by etag which matches.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfNoneMatch::Items(vec![EntityTag::strong("foo".to_owned())]))
               .send()
               .unwrap();
@@ -380,7 +364,6 @@ fn serve_with_strong_etag() {
     // If-None-Match by etag which doesn't match.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfNoneMatch::Items(vec![EntityTag::strong("bar".to_owned())]))
               .send()
               .unwrap();
@@ -393,7 +376,6 @@ fn serve_with_strong_etag() {
     // Range serving - If-Range matching by etag.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
               .header(header::IfRange::EntityTag(EntityTag::strong("foo".to_owned())))
               .send()
@@ -411,7 +393,6 @@ fn serve_with_strong_etag() {
     // Range serving - If-Range not matching by etag.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
               .header(header::IfRange::EntityTag(EntityTag::strong("bar".to_owned())))
               .send()
@@ -428,13 +409,12 @@ fn serve_with_strong_etag() {
 #[test]
 fn serve_with_weak_etag() {
     let _ = env_logger::init();
-    let client = reqwest::Client::new().unwrap();
+    let client = reqwest::Client::new();
     let mut buf = Vec::new();
     let url = format!("{}/weak", *SERVER);
 
     // If-Match any should still send the full body.
     let mut resp = client.get(&url)
-                         .unwrap()
                          .header(header::IfMatch::Any)
                          .send()
                          .unwrap();
@@ -449,7 +429,6 @@ fn serve_with_weak_etag() {
     // If-Match by etag doesn't match because matches use the strong comparison function.
     let resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfMatch::Items(vec![EntityTag::weak("foo".to_owned())]))
               .send()
               .unwrap();
@@ -458,7 +437,6 @@ fn serve_with_weak_etag() {
     // If-None-Match by identical weak etag is sufficient.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfNoneMatch::Items(vec![EntityTag::weak("foo".to_owned())]))
               .send()
               .unwrap();
@@ -471,7 +449,6 @@ fn serve_with_weak_etag() {
     // If-None-Match by etag which doesn't match.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(header::IfNoneMatch::Items(vec![EntityTag::weak("bar".to_owned())]))
               .send()
               .unwrap();
@@ -484,7 +461,6 @@ fn serve_with_weak_etag() {
     // Range serving - If-Range matching by weak etag isn't sufficient.
     let mut resp =
         client.get(&url)
-              .unwrap()
               .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
               .header(header::IfRange::EntityTag(EntityTag::weak("foo".to_owned())))
               .send()
