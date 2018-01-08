@@ -3,6 +3,10 @@ name = "http-entity"
 version = "0.0.1"
 authors = ["Scott Lamb <slamb@slamb.org>"]
 license = "MIT/Apache-2.0"
+readme = "../README.md"
+description = "Conditional GET, HEAD, and byte range serving for abstract HTTP entities."
+keywords = ["http", "file", "range"]
+categories = ["web-programming::http-server"]
 
 [dependencies]
 futures = "0.1.7"
@@ -20,8 +24,8 @@ leak = "0.1"
 log = "0.4"
 reqwest = "0.8"
 
-#[workspace]
-#members = ["http-file"]
+[workspace]
+members = ["http-file"]
 
 [profile.release]
 debug = true

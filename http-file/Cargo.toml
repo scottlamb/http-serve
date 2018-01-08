@@ -2,8 +2,11 @@
 name = "http-file"
 version = "0.0.1"
 authors = ["Scott Lamb <slamb@slamb.org>"]
-license = "MIT"
+license = "MIT/Apache-2.0"
 readme = "../README.md"
+description = "Handle conditional GET, HEAD, and byte range serving for static files."
+keywords = ["http", "static", "file", "range"]
+categories = ["web-programming::http-server"]
 
 [lib]
 path = "lib.rs"
