@@ -39,6 +39,8 @@ pub trait Entity: 'static + Send {
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 
+    fn is_empty(&self) -> bool { self.len() == 0 }
+
     /// Gets the bytes indicated by `range`.
     fn get_range(&self, range: Range<u64>) -> Self::Body;
 
@@ -305,9 +307,9 @@ impl<B, C> Stream for InnerBody<B, C> where B: Stream<Item = C, Error = Error> {
     type Item = C;
     type Error = Error;
     fn poll(&mut self) -> ::futures::Poll<Option<C>, Error> {
-        match self {
-            &mut InnerBody::Once(ref mut o) => Ok(futures::Async::Ready(o.take())),
-            &mut InnerBody::B(ref mut b) => b.poll(),
+        match *self {
+            InnerBody::Once(ref mut o) => Ok(futures::Async::Ready(o.take())),
+            InnerBody::B(ref mut b) => b.poll(),
         }
     }
 }
@@ -333,7 +335,7 @@ fn send_multipart<E: Entity>(e: E, req: &Request, mut res: Response<E::Body>,
         body_len += buf.len() as u64 + r.end - r.start;
         part_headers.push(buf);
     }
-    const TRAILER: &'static [u8] = b"\r\n--B--\r\n";
+    const TRAILER: &[u8] = b"\r\n--B--\r\n";
     body_len += TRAILER.len() as u64;
 
     res.headers_mut().set(header::ContentLength(body_len));

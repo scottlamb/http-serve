@@ -86,8 +86,8 @@ fn new_server() -> String {
     format!("http://{}:{}", addr.ip(), addr.port())
 }
 
-const SOME_DATE_STR: &'static str =  "Sun, 06 Nov 1994 08:49:37 GMT";
-const LATER_DATE_STR: &'static str = "Sun, 06 Nov 1994 09:49:37 GMT";
+const SOME_DATE_STR: &str =  "Sun, 06 Nov 1994 08:49:37 GMT";
+const LATER_DATE_STR: &str = "Sun, 06 Nov 1994 09:49:37 GMT";
 
 lazy_static! {
     static ref SOME_DATE: reqwest::header::HttpDate = { SOME_DATE_STR.parse().unwrap() };

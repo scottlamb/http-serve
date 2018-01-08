@@ -24,10 +24,10 @@ use std::time::{self, SystemTime};
 
 // This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
 // a tradeoff between memory usage and thread handoffs.
-static CHUNK_SIZE: u64 = 65536;
+static CHUNK_SIZE: u64 = 65_536;
 
 /// A HTTP entity created from a `std::fs::File` which reads the file
-/// chunk-by-chunk on a CpuPool.
+/// chunk-by-chunk on a `CpuPool`.
 #[derive(Clone)]
 pub struct ChunkedReadFile<B, C> {
     inner: Arc<ChunkedReadFileInner>,
@@ -77,7 +77,8 @@ where B: 'static + Send + Stream<Item = C, Error = hyper::Error> +
     fn len(&self) -> u64 { self.inner.len }
 
     fn get_range(&self, range: Range<u64>) -> B {
-        let stream = ::futures::stream::unfold((range, self.inner.clone()), move |(left, inner)| {
+        let stream = ::futures::stream::unfold((range, Arc::clone(&self.inner)),
+                                               move |(left, inner)| {
             if left.start == left.end { return None }
             let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
             let mut chunk = Vec::with_capacity(chunk_size);
@@ -93,10 +94,10 @@ where B: 'static + Send + Stream<Item = C, Error = hyper::Error> +
         let stream: Box<Stream<Item = C, Error = hyper::Error> + Send> = match self.inner.pool {
             Some(ref p) => {
                 let (snd, rcv) = ::futures::sync::mpsc::channel(0);
-                p.spawn(snd.send_all(stream.then(|i| Ok(i))))
+                p.spawn(snd.send_all(stream.then(Ok)))
                  .forget();
                 Box::new(rcv.map_err(|()| unreachable!())
-                            .and_then(|r| ::futures::future::result(r)))
+                            .and_then(::futures::future::result))
             },
             None => Box::new(stream),
         };
