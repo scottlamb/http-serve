@@ -52,17 +52,38 @@ pub trait Entity: 'static + Send {
     /// `Content-Type` should be included in the response.
     fn add_headers(&self, &mut header::Headers);
 
+    /// Returns an etag for this entity, if available.
+    /// Implementations are strongly encouraged to provide a strong etag. [RFC 2616 section
+    /// 13.3.3](https://tools.ietf.org/html/rfc2616#section-13.3.3) notes that only strong etags
+    /// are usable for sub-range retrieval.
     fn etag(&self) -> Option<header::EntityTag>;
+
+    /// Returns the last modified time of this resource, if available.
+    /// Note that `serve` may serve an earlier `Last-Modified:` date if this time is in the
+    /// future, as required by [RFC 2616 section
+    /// 14.29](https://tools.ietf.org/html/rfc2616#section-14.29).
     fn last_modified(&self) -> Option<header::HttpDate>;
 }
 
+/// Represents a `Range:` header which has been parsed and resolved to a particular entity length.
 #[derive(Debug, Eq, PartialEq)]
 enum ResolvedRanges {
+    /// No `Range:` header was supplied.
     None,
+
+    /// A `Range:` header was supplied, but none of the ranges were possible to satisfy with the
+    /// given entity length.
     NotSatisfiable,
+
+    /// A `Range:` header was supplied with at least one satisfiable range, included here.
+    /// Non-satisfiable ranges have been dropped. Ranges are converted from the HTTP closed
+    /// interval style to the the std::ops::Range half-open interval style (start inclusive, end
+    /// exclusive).
     Satisfiable(SmallVec<[Range<u64>; 1]>)
 }
 
+/// Parses the byte-range-set in the range header as described in [RFC 2616 section
+/// 14.35.1](https://tools.ietf.org/html/rfc2616#section-14.35.1).
 fn parse_range_header(range: Option<&header::Range>, resource_len: u64) -> ResolvedRanges {
     if let Some(&header::Range::Bytes(ref byte_ranges)) = range {
         let mut ranges: SmallVec<[Range<u64>; 1]> = SmallVec::new();
@@ -71,22 +92,21 @@ fn parse_range_header(range: Option<&header::Range>, resource_len: u64) -> Resol
                 header::ByteRangeSpec::FromTo(range_from, range_to) => {
                     let end = cmp::min(range_to + 1, resource_len);
                     if range_from >= end {
-                        continue;
+                        continue;  // this range is not satisfiable; skip.
                     }
-                    ranges.push(Range{start: range_from, end: end});
+                    ranges.push(range_from .. end);
                 },
                 header::ByteRangeSpec::AllFrom(range_from) => {
                     if range_from >= resource_len {
-                        continue;
+                        continue;  // this range is not satisfiable; skip.
                     }
-                    ranges.push(Range{start: range_from, end: resource_len});
+                    ranges.push(range_from .. resource_len);
                 },
                 header::ByteRangeSpec::Last(last) => {
                     if last >= resource_len {
-                        continue;
+                        continue;  // this range is not satisfiable; skip.
                     }
-                    ranges.push(Range{start: resource_len - last,
-                                      end: resource_len});
+                    ranges.push((resource_len - last) .. resource_len);
                 },
             }
         }
@@ -189,10 +209,6 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
         },
         Some(&header::IfRange::Date(ref if_date)) => {
             if let Some(ref m) = last_modified {
-                // The to_timespec conversion appears necessary because in the If-Range off the
-                // wire, fields such as tm_yday are absent, causing strict equality to spuriously
-                // fail.
-                // TODO: necessary still?
                 if if_date != m {
                     range_hdr = None;
                     true
