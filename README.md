@@ -24,4 +24,5 @@ Scott Lamb, slamb@slamb.org
 
 ## License
 
-MIT; see [LICENSE.txt](LICENSE.txt).
+Your choice of MIT or Apache; see [LICENSE-MIT.txt](LICENSE-MIT.txt) or
+[LICENSE-APACHE](LICENSE-APACHE.txt), respectively.

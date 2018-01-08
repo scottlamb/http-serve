@@ -2,7 +2,7 @@
 name = "http-entity"
 version = "0.0.1"
 authors = ["Scott Lamb <slamb@slamb.org>"]
-license = "MIT"
+license = "MIT/Apache-2.0"
 
 [dependencies]
 futures = "0.1.7"
