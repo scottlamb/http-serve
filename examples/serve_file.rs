@@ -37,10 +37,12 @@ extern crate futures_cpupool;
 extern crate http_entity;
 extern crate http_file;
 extern crate hyper;
+extern crate leak;
 extern crate mime;
 
 use hyper::{Error, StatusCode};
 use hyper::server::{Request, Response};
+use leak::Leak;
 use futures::Future;
 use futures::future;
 use futures::stream::Stream;
@@ -82,16 +84,6 @@ impl hyper::server::Service for MyService {
     }
 }
 
-/// Leaks a given owned object, returning a reference with the static lifetime.
-/// This can save dealing with reference-counting, lazy statics, or mutexes.
-fn leak<T: ?Sized>(b: Box<T>) -> &'static T {
-    unsafe {
-        let r = ::std::mem::transmute(&*b);
-        ::std::mem::forget(b);
-        r
-    }
-}
-
 fn main() {
     let mut args = ::std::env::args_os();
     if args.len() != 2 {
@@ -101,10 +93,10 @@ fn main() {
     }
     let path = args.nth(1).unwrap();
 
-    let ctx = leak(Box::new(Context{
+    let ctx = Box::new(Context {
         path: path,
         pool: CpuPool::new(1),
-    }));
+    }).leak();
 
     env_logger::init().unwrap();
     let addr = "127.0.0.1:1337".parse().unwrap();
