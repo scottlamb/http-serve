@@ -50,11 +50,14 @@ impl<B, C> ChunkedReadFile<B, C> {
     /// tokio reactor thread on local disk I/O. Note that `File::open` and this constructor
     /// (specifically, its call to `fstat(2)`) may also block, so they typically shouldn't be
     /// called on the tokio reactor either.
-    pub fn new(file: ::std::fs::File, pool: Option<CpuPool>, content_type: ::mime::Mime)
-               -> Result<Self, io::Error> {
+    pub fn new(
+        file: ::std::fs::File,
+        pool: Option<CpuPool>,
+        content_type: ::mime::Mime,
+    ) -> Result<Self, io::Error> {
         let m = file.metadata()?;
-        Ok(ChunkedReadFile{
-            inner: Arc::new(ChunkedReadFileInner{
+        Ok(ChunkedReadFile {
+            inner: Arc::new(ChunkedReadFileInner {
                 len: m.len(),
                 inode: m.ino(),
                 mtime: m.modified()?,
@@ -68,37 +71,49 @@ impl<B, C> ChunkedReadFile<B, C> {
 }
 
 impl<B, C> Entity for ChunkedReadFile<B, C>
-where B: 'static + Send + Stream<Item = C, Error = hyper::Error> +
-         From<Box<Stream<Item = C, Error = hyper::Error> + Send>>,
-      C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]> {
+where
+    B: 'static
+        + Send
+        + Stream<Item = C, Error = hyper::Error>
+        + From<Box<Stream<Item = C, Error = hyper::Error> + Send>>,
+    C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]>,
+{
     type Chunk = C;
     type Body = B;
 
-    fn len(&self) -> u64 { self.inner.len }
+    fn len(&self) -> u64 {
+        self.inner.len
+    }
 
     fn get_range(&self, range: Range<u64>) -> B {
-        let stream = ::futures::stream::unfold((range, Arc::clone(&self.inner)),
-                                               move |(left, inner)| {
-            if left.start == left.end { return None }
-            let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
-            let mut chunk = Vec::with_capacity(chunk_size);
-            unsafe { chunk.set_len(chunk_size) };
-            let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
-                Err(e) => return Some(Err(e.into())),
-                Ok(b) => b,
-            };
-            chunk.truncate(bytes_read);
-            Some(Ok((chunk.into(), (left.start + bytes_read as u64 .. left.end, inner))))
-        });
+        let stream =
+            ::futures::stream::unfold((range, Arc::clone(&self.inner)), move |(left, inner)| {
+                if left.start == left.end {
+                    return None;
+                }
+                let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
+                let mut chunk = Vec::with_capacity(chunk_size);
+                unsafe { chunk.set_len(chunk_size) };
+                let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
+                    Err(e) => return Some(Err(e.into())),
+                    Ok(b) => b,
+                };
+                chunk.truncate(bytes_read);
+                Some(Ok((
+                    chunk.into(),
+                    (left.start + bytes_read as u64..left.end, inner),
+                )))
+            });
 
         let stream: Box<Stream<Item = C, Error = hyper::Error> + Send> = match self.inner.pool {
             Some(ref p) => {
                 let (snd, rcv) = ::futures::sync::mpsc::channel(0);
-                p.spawn(snd.send_all(stream.then(Ok)))
-                 .forget();
-                Box::new(rcv.map_err(|()| unreachable!())
-                            .and_then(::futures::future::result))
-            },
+                p.spawn(snd.send_all(stream.then(Ok))).forget();
+                Box::new(
+                    rcv.map_err(|()| unreachable!())
+                        .and_then(::futures::future::result),
+                )
+            }
             None => Box::new(stream),
         };
         stream.into()
@@ -111,11 +126,20 @@ where B: 'static + Send + Stream<Item = C, Error = hyper::Error> +
     fn etag(&self) -> Option<header::EntityTag> {
         // This etag format is similar to Apache's. The etag should change if the file is modified
         // or replaced. The length is probably redundant but doesn't harm anything.
-        let dur = self.inner.mtime.duration_since(time::UNIX_EPOCH)
+        let dur = self.inner
+            .mtime
+            .duration_since(time::UNIX_EPOCH)
             .expect("modification time must be after epoch");
-        Some(header::EntityTag::strong(format!("{:x}:{:x}:{:x}:{:x}", self.inner.inode,
-                                               self.inner.len, dur.as_secs(), dur.subsec_nanos())))
+        Some(header::EntityTag::strong(format!(
+            "{:x}:{:x}:{:x}:{:x}",
+            self.inner.inode,
+            self.inner.len,
+            dur.as_secs(),
+            dur.subsec_nanos()
+        )))
     }
 
-    fn last_modified(&self) -> Option<header::HttpDate> { Some(self.inner.mtime.into()) }
+    fn last_modified(&self) -> Option<header::HttpDate> {
+        Some(self.inner.mtime.into())
+    }
 }

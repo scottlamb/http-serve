@@ -33,13 +33,17 @@ pub trait Entity: 'static + Send {
 
     /// The type of the body stream. Commonly
     /// `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send>`.
-    type Body: 'static + Send + Stream<Item = Self::Chunk, Error = Error> +
-               From<Box<Stream<Item = Self::Chunk, Error = Error> + Send>>;
+    type Body: 'static
+        + Send
+        + Stream<Item = Self::Chunk, Error = Error>
+        + From<Box<Stream<Item = Self::Chunk, Error = Error> + Send>>;
 
     /// Returns the length of the entity in bytes.
     fn len(&self) -> u64;
 
-    fn is_empty(&self) -> bool { self.len() == 0 }
+    fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
 
     /// Gets the bytes indicated by `range`.
     fn get_range(&self, range: Range<u64>) -> Self::Body;
@@ -81,7 +85,7 @@ enum ResolvedRanges {
     /// Non-satisfiable ranges have been dropped. Ranges are converted from the HTTP closed
     /// interval style to the the std::ops::Range half-open interval style (start inclusive, end
     /// exclusive).
-    Satisfiable(SmallVec<[Range<u64>; 1]>)
+    Satisfiable(SmallVec<[Range<u64>; 1]>),
 }
 
 /// Parses the byte-range-set in the range header as described in [RFC 2616 section
@@ -94,22 +98,22 @@ fn parse_range_header(range: Option<&header::Range>, resource_len: u64) -> Resol
                 header::ByteRangeSpec::FromTo(range_from, range_to) => {
                     let end = cmp::min(range_to + 1, resource_len);
                     if range_from >= end {
-                        continue;  // this range is not satisfiable; skip.
+                        continue; // this range is not satisfiable; skip.
                     }
-                    ranges.push(range_from .. end);
-                },
+                    ranges.push(range_from..end);
+                }
                 header::ByteRangeSpec::AllFrom(range_from) => {
                     if range_from >= resource_len {
-                        continue;  // this range is not satisfiable; skip.
+                        continue; // this range is not satisfiable; skip.
                     }
-                    ranges.push(range_from .. resource_len);
-                },
+                    ranges.push(range_from..resource_len);
+                }
                 header::ByteRangeSpec::Last(last) => {
                     if last >= resource_len {
-                        continue;  // this range is not satisfiable; skip.
+                        continue; // this range is not satisfiable; skip.
                     }
-                    ranges.push((resource_len - last) .. resource_len);
-                },
+                    ranges.push((resource_len - last)..resource_len);
+                }
             }
         }
         if !ranges.is_empty() {
@@ -133,7 +137,7 @@ fn none_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
                 }
             }
             true
-        },
+        }
         None => true,
     }
 }
@@ -153,7 +157,7 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
                 }
             }
             false
-        },
+        }
     }
 }
 
@@ -166,8 +170,9 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 /// doing this correctly.
 pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     if *req.method() != Method::Get && *req.method() != Method::Head {
-        let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> =
-            Box::new(stream::once(Ok(b"This resource only supports GET and HEAD."[..].into())));
+        let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> = Box::new(stream::once(Ok(
+            b"This resource only supports GET and HEAD."[..].into(),
+        )));
         return Response::new()
             .with_status(hyper::StatusCode::MethodNotAllowed)
             .with_header(header::ContentType(mime::TEXT_PLAIN))
@@ -181,16 +186,22 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     let precondition_failed = if !any_match(&etag, req) {
         true
     } else if let (Some(ref m), Some(&header::IfUnmodifiedSince(ref since))) =
-                  (last_modified, req.headers().get()) {
+        (last_modified, req.headers().get())
+    {
         m > since
-    } else { false };
+    } else {
+        false
+    };
 
     let not_modified = if !none_match(&etag, req) {
         true
     } else if let (Some(ref m), Some(&header::IfModifiedSince(ref since))) =
-                  (last_modified, req.headers().get()) {
+        (last_modified, req.headers().get())
+    {
         m <= since
-    } else { false };
+    } else {
+        false
+    };
 
     // See RFC 2616 section 10.2.7: a Partial Content response should include certain
     // entity-headers or not based on the If-Range response.
@@ -208,7 +219,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
                 range_hdr = None;
                 true
             }
-        },
+        }
         Some(&header::IfRange::Date(ref if_date)) => {
             if let Some(ref m) = last_modified {
                 if if_date != m {
@@ -221,12 +232,13 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
                 range_hdr = None;
                 true
             }
-        },
+        }
         None => true,
     };
 
     let mut res = Response::new();
-    res.headers_mut().set(header::AcceptRanges(vec![header::RangeUnit::Bytes]));
+    res.headers_mut()
+        .set(header::AcceptRanges(vec![header::RangeUnit::Bytes]));
     if let Some(m) = last_modified {
         // See RFC 2616 section 14.29: the Last-Modified must not exceed the Date. To guarantee
         // this, setet the Date now (if one hasn't already been set) rather than let hyper set it.
@@ -237,7 +249,8 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
             res.headers_mut().set(header::Date(d));
             d
         };
-        res.headers_mut().set(header::LastModified(::std::cmp::min(m, d)));
+        res.headers_mut()
+            .set(header::LastModified(::std::cmp::min(m, d)));
     }
     if let Some(e) = etag {
         res.headers_mut().set(header::ETag(e));
@@ -257,13 +270,14 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
 
     let len = e.len();
     let (range, include_entity_headers) = match parse_range_header(range_hdr, len) {
-        ResolvedRanges::None => (0 .. len, true),
+        ResolvedRanges::None => (0..len, true),
         ResolvedRanges::Satisfiable(rs) => {
             if rs.len() == 1 {
-                res.headers_mut().set(header::ContentRange(
-                    header::ContentRangeSpec::Bytes{
-                        range: Some((rs[0].start, rs[0].end-1)),
-                        instance_length: Some(len)}));
+                res.headers_mut()
+                    .set(header::ContentRange(header::ContentRangeSpec::Bytes {
+                        range: Some((rs[0].start, rs[0].end - 1)),
+                        instance_length: Some(len),
+                    }));
                 res.set_status(hyper::StatusCode::PartialContent);
                 (rs[0].clone(), include_entity_headers_on_range)
             } else {
@@ -275,14 +289,15 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
                     return send_multipart(e, req, res, rs, len, include_entity_headers_on_range);
                 }
 
-                (0 .. len, true)
+                (0..len, true)
             }
-        },
+        }
         ResolvedRanges::NotSatisfiable => {
-            res.headers_mut().set(header::ContentRange(
-                header::ContentRangeSpec::Bytes{
+            res.headers_mut()
+                .set(header::ContentRange(header::ContentRangeSpec::Bytes {
                     range: None,
-                    instance_length: Some(len)}));
+                    instance_length: Some(len),
+                }));
             res.set_status(hyper::StatusCode::RangeNotSatisfiable);
             return res;
         }
@@ -290,7 +305,8 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     if include_entity_headers {
         e.add_headers(res.headers_mut());
     }
-    res.headers_mut().set(header::ContentLength(range.end - range.start));
+    res.headers_mut()
+        .set(header::ContentLength(range.end - range.start));
     if *req.method() == Method::Head {
         return res;
     }
@@ -303,7 +319,10 @@ enum InnerBody<B, C> {
     B(B),
 }
 
-impl<B, C> Stream for InnerBody<B, C> where B: Stream<Item = C, Error = Error> {
+impl<B, C> Stream for InnerBody<B, C>
+where
+    B: Stream<Item = C, Error = Error>,
+{
     type Item = C;
     type Error = Error;
     fn poll(&mut self) -> ::futures::Poll<Option<C>, Error> {
@@ -314,9 +333,14 @@ impl<B, C> Stream for InnerBody<B, C> where B: Stream<Item = C, Error = Error> {
     }
 }
 
-fn send_multipart<E: Entity>(e: E, req: &Request, mut res: Response<E::Body>,
-                             rs: SmallVec<[Range<u64>; 1]>, len: u64, include_entity_headers: bool)
-                             -> Response<E::Body> {
+fn send_multipart<E: Entity>(
+    e: E,
+    req: &Request,
+    mut res: Response<E::Body>,
+    rs: SmallVec<[Range<u64>; 1]>,
+    len: u64,
+    include_entity_headers: bool,
+) -> Response<E::Body> {
     let mut body_len = 0;
     let mut each_part_headers = Vec::with_capacity(128);
     if include_entity_headers {
@@ -329,8 +353,13 @@ fn send_multipart<E: Entity>(e: E, req: &Request, mut res: Response<E::Body>,
     let mut part_headers: Vec<Vec<u8>> = Vec::with_capacity(2 * rs.len() + 1);
     for r in &rs {
         let mut buf = Vec::with_capacity(64 + each_part_headers.len());
-        write!(&mut buf, "\r\n--B\r\nContent-Range: bytes {}-{}/{}\r\n",
-               r.start, r.end - 1, len).unwrap();
+        write!(
+            &mut buf,
+            "\r\n--B\r\nContent-Range: bytes {}-{}/{}\r\n",
+            r.start,
+            r.end - 1,
+            len
+        ).unwrap();
         buf.extend_from_slice(&each_part_headers);
         body_len += buf.len() as u64 + r.end - r.start;
         part_headers.push(buf);
@@ -339,7 +368,10 @@ fn send_multipart<E: Entity>(e: E, req: &Request, mut res: Response<E::Body>,
     body_len += TRAILER.len() as u64;
 
     res.headers_mut().set(header::ContentLength(body_len));
-    res.headers_mut().set_raw("Content-Type", vec![b"multipart/byteranges; boundary=B".to_vec()]);
+    res.headers_mut().set_raw(
+        "Content-Type",
+        vec![b"multipart/byteranges; boundary=B".to_vec()],
+    );
     res.set_status(hyper::StatusCode::PartialContent);
 
     if *req.method() == Method::Head {
@@ -374,94 +406,132 @@ mod tests {
     use hyper::header::ByteRangeSpec;
     use hyper::header::Range::Bytes;
     use smallvec::SmallVec;
-    use super::{ResolvedRanges, parse_range_header};
+    use super::{parse_range_header, ResolvedRanges};
 
     /// Tests the specific examples enumerated in RFC 2616 section 14.35.1.
     #[test]
     fn test_resolve_ranges_rfc() {
         let mut v = SmallVec::new();
 
-        v.push(0 .. 500);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 499)])),
-                                      10000));
+        v.push(0..500);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 499)])), 10000)
+        );
 
         v.clear();
-        v.push(500 .. 1000);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(500, 999)])),
-                                      10000));
+        v.push(500..1000);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(500, 999)])), 10000)
+        );
 
         v.clear();
-        v.push(9500 .. 10000);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::Last(500)])),
-                                      10000));
+        v.push(9500..10000);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::Last(500)])), 10000)
+        );
 
         v.clear();
-        v.push(9500 .. 10000);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(9500)])),
-                                      10000));
+        v.push(9500..10000);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(9500)])), 10000)
+        );
 
         v.clear();
-        v.push(0 .. 1);
-        v.push(9999 .. 10000);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0),
-                                                              ByteRangeSpec::Last(1)])),
-                                      10000));
+        v.push(0..1);
+        v.push(9999..10000);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(
+                Some(&Bytes(vec![
+                    ByteRangeSpec::FromTo(0, 0),
+                    ByteRangeSpec::Last(1),
+                ])),
+                10000
+            )
+        );
 
         // Non-canonical ranges. Possibly the point of these is that the adjacent and overlapping
         // ranges are supposed to be coalesced into one? I'm not going to do that for now.
 
         v.clear();
-        v.push(500 .. 601);
-        v.push(601 .. 1000);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(500, 600),
-                                                              ByteRangeSpec::FromTo(601, 999)])),
-                                      10000));
+        v.push(500..601);
+        v.push(601..1000);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(
+                Some(&Bytes(vec![
+                    ByteRangeSpec::FromTo(500, 600),
+                    ByteRangeSpec::FromTo(601, 999),
+                ])),
+                10000
+            )
+        );
 
         v.clear();
-        v.push(500 .. 701);
-        v.push(601 .. 1000);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(500, 700),
-                                                              ByteRangeSpec::FromTo(601, 999)])),
-                                      10000));
+        v.push(500..701);
+        v.push(601..1000);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(
+                Some(&Bytes(vec![
+                    ByteRangeSpec::FromTo(500, 700),
+                    ByteRangeSpec::FromTo(601, 999),
+                ])),
+                10000
+            )
+        );
     }
 
     #[test]
     fn test_resolve_ranges_satisfiability() {
-        assert_eq!(ResolvedRanges::NotSatisfiable,
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(10000)])),
-                                      10000));
+        assert_eq!(
+            ResolvedRanges::NotSatisfiable,
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(10000)])), 10000)
+        );
 
         let mut v = SmallVec::new();
-        v.push(0 .. 500);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 499),
-                                                              ByteRangeSpec::AllFrom(10000)])),
-                                      10000));
+        v.push(0..500);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(
+                Some(&Bytes(vec![
+                    ByteRangeSpec::FromTo(0, 499),
+                    ByteRangeSpec::AllFrom(10000),
+                ])),
+                10000
+            )
+        );
 
-        assert_eq!(ResolvedRanges::NotSatisfiable,
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::Last(1)])), 0));
-        assert_eq!(ResolvedRanges::NotSatisfiable,
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0)])), 0));
-        assert_eq!(ResolvedRanges::NotSatisfiable,
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(0)])), 0));
+        assert_eq!(
+            ResolvedRanges::NotSatisfiable,
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::Last(1)])), 0)
+        );
+        assert_eq!(
+            ResolvedRanges::NotSatisfiable,
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0)])), 0)
+        );
+        assert_eq!(
+            ResolvedRanges::NotSatisfiable,
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(0)])), 0)
+        );
 
         v.clear();
-        v.push(0 .. 1);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0)])), 1));
+        v.push(0..1);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0)])), 1)
+        );
 
         v.clear();
-        v.push(0 .. 500);
-        assert_eq!(ResolvedRanges::Satisfiable(v.clone()),
-                   parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 10000)])),
-                                      500));
+        v.push(0..500);
+        assert_eq!(
+            ResolvedRanges::Satisfiable(v.clone()),
+            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 10000)])), 500)
+        );
     }
 
     #[test]

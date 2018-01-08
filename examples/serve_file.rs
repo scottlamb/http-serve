@@ -54,12 +54,20 @@ impl hyper::server::Service for MyService {
             "/pool-inline" => (true, false),
             "/inline-pool" => (false, true),
             "/pool-pool" => (true, true),
-            _ => return Box::new(future::ok(Response::new().with_status(StatusCode::NotFound))),
+            _ => {
+                return Box::new(future::ok(
+                    Response::new().with_status(StatusCode::NotFound),
+                ))
+            }
         };
         let ctx = self.0;
         let construction = move || {
             let f = ::std::fs::File::open(&ctx.path)?;
-            let p = if pool_stream { Some(ctx.pool.clone()) } else { None };
+            let p = if pool_stream {
+                Some(ctx.pool.clone())
+            } else {
+                None
+            };
             let f = http_file::ChunkedReadFile::new(f, p, mime::TEXT_PLAIN)?;
             Ok(http_entity::serve(f, &req))
         };
@@ -74,7 +82,7 @@ impl hyper::server::Service for MyService {
 fn main() {
     let mut args = ::std::env::args_os();
     if args.len() != 2 {
-        use ::std::io::Write;
+        use std::io::Write;
         writeln!(&mut std::io::stderr(), "Expected serve [FILENAME]").unwrap();
         ::std::process::exit(1);
     }
@@ -87,8 +95,13 @@ fn main() {
 
     env_logger::init().unwrap();
     let addr = "127.0.0.1:1337".parse().unwrap();
-    let server = hyper::server::Http::new().bind(&addr, move || Ok(MyService(ctx))).unwrap();
-    println!("Serving {} on http://{} with 1 thread.",
-             ctx.path.to_string_lossy(), server.local_addr().unwrap());
+    let server = hyper::server::Http::new()
+        .bind(&addr, move || Ok(MyService(ctx)))
+        .unwrap();
+    println!(
+        "Serving {} on http://{} with 1 thread.",
+        ctx.path.to_string_lossy(),
+        server.local_addr().unwrap()
+    );
     server.run().unwrap();
 }
