@@ -8,6 +8,9 @@ description = "Conditional GET, HEAD, and byte range serving for abstract HTTP e
 keywords = ["http", "file", "range"]
 categories = ["web-programming::http-server"]
 
+[badges]
+travis-ci = { repository = "scottlamb/http-entity" }
+
 [dependencies]
 futures = "0.1.7"
 hyper = "0.11"

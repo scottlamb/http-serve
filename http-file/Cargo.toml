@@ -8,6 +8,9 @@ description = "Handle conditional GET, HEAD, and byte range serving for static f
 keywords = ["http", "static", "file", "range"]
 categories = ["web-programming::http-server"]
 
+[badges]
+travis-ci = { repository = "scottlamb/http-entity" }
+
 [lib]
 path = "lib.rs"
 
