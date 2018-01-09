@@ -27,11 +27,10 @@ extern crate hyper;
 extern crate leak;
 extern crate mime;
 
-use hyper::{Error, StatusCode};
+use hyper::Error;
 use hyper::server::{Request, Response};
 use leak::Leak;
 use futures::Future;
-use futures::future;
 use futures::stream::Stream;
 use futures_cpupool::CpuPool;
 
@@ -49,33 +48,12 @@ impl hyper::server::Service for MyService {
     type Future = Box<Future<Item = Self::Response, Error = Error>>;
 
     fn call(&self, req: Request) -> Self::Future {
-        let (pool_constructor, pool_stream) = match req.path() {
-            "/" | "/inline-inline" => (false, false),
-            "/pool-inline" => (true, false),
-            "/inline-pool" => (false, true),
-            "/pool-pool" => (true, true),
-            _ => {
-                return Box::new(future::ok(
-                    Response::new().with_status(StatusCode::NotFound),
-                ))
-            }
-        };
         let ctx = self.0;
-        let construction = move || {
+        Box::new(ctx.pool.spawn_fn(move || {
             let f = ::std::fs::File::open(&ctx.path)?;
-            let p = if pool_stream {
-                Some(ctx.pool.clone())
-            } else {
-                None
-            };
-            let f = http_file::ChunkedReadFile::new(f, p, mime::TEXT_PLAIN)?;
+            let f = http_file::ChunkedReadFile::new(f, Some(ctx.pool.clone()), mime::TEXT_PLAIN)?;
             Ok(http_entity::serve(f, &req))
-        };
-        if pool_constructor {
-            Box::new(ctx.pool.spawn_fn(construction))
-        } else {
-            Box::new(future::result(construction()))
-        }
+        }))
     }
 }
 
