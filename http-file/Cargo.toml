@@ -22,3 +22,6 @@ hyper = "0.11.x"
 log = "0.4"
 mime = "0.3"
 time = "0.1"
+
+[dev-dependencies]
+tempdir = "0.3"

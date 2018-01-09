@@ -143,3 +143,57 @@ where
         Some(self.inner.mtime.into())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    extern crate tempdir;
+
+    use futures::{Future, Stream};
+    use futures_cpupool::CpuPool;
+    use http_entity::Entity;
+    use hyper::Error;
+    use self::tempdir::TempDir;
+    use std::io::Write;
+    use std::fs::File;
+    use super::ChunkedReadFile;
+    use super::mime;
+
+    type Body = Box<Stream<Item = Vec<u8>, Error = Error> + Send>;
+
+    fn basic_tests(pool: Option<CpuPool>) {
+        let tmp = TempDir::new("http-file").unwrap();
+        let p = tmp.path().join("f");
+        let mut f = File::create(&p).unwrap();
+        f.write_all(b"asdf").unwrap();
+
+        let crf = ChunkedReadFile::<Body, _>::new(
+            File::open(&p).unwrap(),
+            pool.clone(),
+            mime::TEXT_PLAIN,
+        ).unwrap();
+        assert_eq!(4, crf.len());
+        let etag1 = crf.etag();
+
+        // Test returning part/all of the stream.
+        assert_eq!(&crf.get_range(0..4).concat2().wait().unwrap(), b"asdf");
+        assert_eq!(&crf.get_range(1..3).concat2().wait().unwrap(), b"sd");
+
+        // A ChunkedReadFile constructed from a modified file should have a different etag.
+        f.write_all(b"jkl;").unwrap();
+        let crf = ChunkedReadFile::<Body, _>::new(File::open(&p).unwrap(), pool, mime::TEXT_PLAIN)
+            .unwrap();
+        assert_eq!(8, crf.len());
+        let etag2 = crf.etag();
+        assert_ne!(etag1, etag2);
+    }
+
+    #[test]
+    fn with_pool() {
+        basic_tests(Some(CpuPool::new(1)));
+    }
+
+    #[test]
+    fn without_pool() {
+        basic_tests(None);
+    }
+}
