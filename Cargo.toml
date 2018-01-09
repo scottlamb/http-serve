@@ -23,6 +23,7 @@ lazy_static = "1.0"
 leak = "0.1"
 log = "0.4"
 reqwest = "0.8"
+tempdir = "0.3"
 
 [workspace]
 members = ["http-file"]
