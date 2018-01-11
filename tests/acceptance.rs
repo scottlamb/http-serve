@@ -301,24 +301,21 @@ fn serve_without_etag() {
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"", &buf[..]);
 
-    // Range serving - matching If-Range by date honors the range.
+    // Range serving - matching If-Range by date doesn't honor the range.
     let mut resp = client
         .get(&url)
         .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
         .header(header::IfRange::Date(*SOME_DATE))
         .send()
         .unwrap();
-    assert_eq!(reqwest::StatusCode::PartialContent, resp.status());
+    assert_eq!(reqwest::StatusCode::Ok, resp.status());
     assert_eq!(
-        Some(&header::ContentRange(ContentRangeSpec::Bytes {
-            range: Some((1, 3)),
-            instance_length: Some(BODY.len() as u64),
-        })),
-        resp.headers().get()
+        Some(&header::ContentType(MIME.clone())),
+        resp.headers().get::<header::ContentType>()
     );
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"123", &buf[..]);
+    assert_eq!(BODY, &buf[..]);
 
     // Range serving - non-matching If-Range by date ignores the range.
     let mut resp = client

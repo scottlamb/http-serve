@@ -49,25 +49,24 @@ pub trait Entity: 'static + Send {
     fn get_range(&self, range: Range<u64>) -> Self::Body;
 
     /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
-    /// In particular, these headers are the "other entity-headers" described by [RFC 2616 section
-    /// 10.2.7](https://tools.ietf.org/html/rfc2616#section-10.2.7); they should exclude
-    /// `Content-Range`, `Date`, `ETag`, `Content-Location`, `Expires`, `Cache-Control`, and
-    /// `Vary`.
+    /// In particular, these headers are the "other representation header fields" described by [RFC
+    /// 7233 section 4.1](https://tools.ietf.org/html/rfc7233#section-4.1); they should exclude
+    /// `Content-Range`, `Date`, `Cache-Control`, `ETag`, `Expires`, `Content-Location`, and `Vary`.
     ///
     /// This function will be called only when that section says that headers such as
     /// `Content-Type` should be included in the response.
     fn add_headers(&self, &mut header::Headers);
 
     /// Returns an etag for this entity, if available.
-    /// Implementations are strongly encouraged to provide a strong etag. [RFC 2616 section
-    /// 13.3.3](https://tools.ietf.org/html/rfc2616#section-13.3.3) notes that only strong etags
+    /// Implementations are strongly encouraged to provide a strong etag. [RFC 7232 section
+    /// 2.1](https://tools.ietf.org/html/rfc7232#section-2.1) notes that only strong etags
     /// are usable for sub-range retrieval.
     fn etag(&self) -> Option<header::EntityTag>;
 
     /// Returns the last modified time of this resource, if available.
     /// Note that `serve` may serve an earlier `Last-Modified:` date if this time is in the
-    /// future, as required by [RFC 2616 section
-    /// 14.29](https://tools.ietf.org/html/rfc2616#section-14.29).
+    /// future, as required by [RFC 7232 section
+    /// 2.2.1](https://tools.ietf.org/html/rfc7232#section-2.2.1).
     fn last_modified(&self) -> Option<header::HttpDate>;
 }
 
@@ -88,8 +87,8 @@ enum ResolvedRanges {
     Satisfiable(SmallVec<[Range<u64>; 1]>),
 }
 
-/// Parses the byte-range-set in the range header as described in [RFC 2616 section
-/// 14.35.1](https://tools.ietf.org/html/rfc2616#section-14.35.1).
+/// Parses the byte-range-set in the range header as described in [RFC 7233 section
+/// 2.1](https://tools.ietf.org/html/rfc7233#section-2.1).
 fn parse_range_header(range: Option<&header::Range>, resource_len: u64) -> ResolvedRanges {
     if let Some(&header::Range::Bytes(ref byte_ranges)) = range {
         let mut ranges: SmallVec<[Range<u64>; 1]> = SmallVec::new();
@@ -165,9 +164,6 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 /// Handles conditional & subrange requests.
 /// The caller is expected to have already determined the correct resource and appended
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
-///
-/// TODO: check HTTP rules about weak vs strong comparisons with range requests. I don't think I'm
-/// doing this correctly.
 pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     if *req.method() != Method::Get && *req.method() != Method::Head {
         let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> = Box::new(stream::once(Ok(
@@ -203,8 +199,9 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
         false
     };
 
-    // See RFC 2616 section 10.2.7: a Partial Content response should include certain
-    // entity-headers or not based on the If-Range response.
+    // See RFC 7233 section 3.3 <https://tools.ietf.org/html/rfc7233#section-3.2>: a Partial
+    // Content response should include certain entity-headers or not based on the If-Range
+    // response.
     let mut range_hdr = req.headers().get::<header::Range>();
     let include_entity_headers_on_range = match req.headers().get::<header::IfRange>() {
         Some(&header::IfRange::EntityTag(ref if_etag)) => {
@@ -220,19 +217,13 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
                 true
             }
         }
-        Some(&header::IfRange::Date(ref if_date)) => {
-            if let Some(ref m) = last_modified {
-                if if_date != m {
-                    range_hdr = None;
-                    true
-                } else {
-                    false
-                }
-            } else {
-                range_hdr = None;
-                true
-            }
-        }
+        Some(&header::IfRange::Date(_)) => {
+            // Use the strong validation rules for an origin server:
+            // <https://tools.ietf.org/html/rfc7232#section-2.2.2>.
+            // The resource could have changed twice in the supplied second, so never match.
+            range_hdr = None;
+            true
+        },
         None => true,
     };
 
@@ -240,8 +231,9 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     res.headers_mut()
         .set(header::AcceptRanges(vec![header::RangeUnit::Bytes]));
     if let Some(m) = last_modified {
-        // See RFC 2616 section 14.29: the Last-Modified must not exceed the Date. To guarantee
-        // this, setet the Date now (if one hasn't already been set) rather than let hyper set it.
+        // See RFC 7232 section 2.2.1 <https://tools.ietf.org/html/rfc7232#section-2.2.1>: the
+        // Last-Modified must not exceed the Date. To guarantee this, setet the Date now (if one
+        // hasn't already been set) rather than let hyper set it.
         let d = if let Some(&header::Date(d)) = res.headers().get() {
             d
         } else {
@@ -408,7 +400,8 @@ mod tests {
     use smallvec::SmallVec;
     use super::{parse_range_header, ResolvedRanges};
 
-    /// Tests the specific examples enumerated in RFC 2616 section 14.35.1.
+    /// Tests the specific examples enumerated in [RFC 2616 section
+    /// 14.35.1](https://tools.ietf.org/html/rfc2616#section-14.35.1).
     #[test]
     fn test_resolve_ranges_rfc() {
         let mut v = SmallVec::new();
