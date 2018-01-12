@@ -25,27 +25,33 @@ use std::io::Write;
 use std::ops::Range;
 use std::time::SystemTime;
 
-/// An HTTP entity for GET and HEAD serving.
+/// A read-only HTTP entity for GET and HEAD serving.
 pub trait Entity: 'static + Send {
-    /// The type of a chunk. Commonly `::hyper::Chunk` or `Vec<u8>` but may be something more
-    /// exotic such as `::reffers::ARefs<'static, [u8]>` to minimize copying.
+    /// The type of a chunk.
+    ///
+    /// Commonly `::hyper::Chunk` or `Vec<u8>` but may be something more exotic such as
+    /// `::reffers::ARefs<'static, [u8]>` to minimize copying.
     type Chunk: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]>;
 
     /// The type of the body stream. Commonly
     /// `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send>`.
+    ///
+    /// Note: unfortunately `::hyper::Body` is not possible because it doesn't implement
+    /// `From<Box<Stream...>>`.
     type Body: 'static
         + Send
         + Stream<Item = Self::Chunk, Error = Error>
         + From<Box<Stream<Item = Self::Chunk, Error = Error> + Send>>;
 
-    /// Returns the length of the entity in bytes.
+    /// Returns the length of the entity's body in bytes.
     fn len(&self) -> u64;
 
+    /// Returns true iff the entity's body has length 0.
     fn is_empty(&self) -> bool {
         self.len() == 0
     }
 
-    /// Gets the bytes indicated by `range`.
+    /// Gets the body bytes indicated by `range`.
     fn get_range(&self, range: Range<u64>) -> Self::Body;
 
     /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
@@ -58,14 +64,14 @@ pub trait Entity: 'static + Send {
     fn add_headers(&self, &mut header::Headers);
 
     /// Returns an etag for this entity, if available.
-    /// Implementations are strongly encouraged to provide a strong etag. [RFC 7232 section
+    /// Implementations are encouraged to provide a strong etag. [RFC 7232 section
     /// 2.1](https://tools.ietf.org/html/rfc7232#section-2.1) notes that only strong etags
     /// are usable for sub-range retrieval.
     fn etag(&self) -> Option<header::EntityTag>;
 
-    /// Returns the last modified time of this resource, if available.
-    /// Note that `serve` may serve an earlier `Last-Modified:` date if this time is in the
-    /// future, as required by [RFC 7232 section
+    /// Returns the last modified time of this entity, if available.
+    /// Note that `serve` may serve an earlier `Last-Modified:` date than the one returned here if
+    /// this time is in the future, as required by [RFC 7232 section
     /// 2.2.1](https://tools.ietf.org/html/rfc7232#section-2.2.1).
     fn last_modified(&self) -> Option<header::HttpDate>;
 }
@@ -89,30 +95,30 @@ enum ResolvedRanges {
 
 /// Parses the byte-range-set in the range header as described in [RFC 7233 section
 /// 2.1](https://tools.ietf.org/html/rfc7233#section-2.1).
-fn parse_range_header(range: Option<&header::Range>, resource_len: u64) -> ResolvedRanges {
+fn parse_range_header(range: Option<&header::Range>, len: u64) -> ResolvedRanges {
     if let Some(&header::Range::Bytes(ref byte_ranges)) = range {
         let mut ranges: SmallVec<[Range<u64>; 1]> = SmallVec::new();
         for range in byte_ranges {
             match *range {
                 header::ByteRangeSpec::FromTo(range_from, range_to) => {
-                    let end = cmp::min(range_to + 1, resource_len);
+                    let end = cmp::min(range_to + 1, len);
                     if range_from >= end {
                         continue; // this range is not satisfiable; skip.
                     }
                     ranges.push(range_from..end);
                 }
                 header::ByteRangeSpec::AllFrom(range_from) => {
-                    if range_from >= resource_len {
+                    if range_from >= len {
                         continue; // this range is not satisfiable; skip.
                     }
-                    ranges.push(range_from..resource_len);
+                    ranges.push(range_from..len);
                 }
                 header::ByteRangeSpec::Last(last) => {
-                    if last >= resource_len {
+                    if last >= len {
                         continue; // this range is not satisfiable; skip.
                     }
-                    ranges.push((resource_len - last)..resource_len);
-                }
+                    ranges.push((len - last)..len);
+ ;               }
             }
         }
         if !ranges.is_empty() {
@@ -160,9 +166,9 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
     }
 }
 
-/// Serves GET and HEAD requests for a given byte-ranged resource.
+/// Serves GET and HEAD requests for a given byte-ranged entity.
 /// Handles conditional & subrange requests.
-/// The caller is expected to have already determined the correct resource and appended
+/// The caller is expected to have already determined the correct entity and appended
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
 pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     if *req.method() != Method::Get && *req.method() != Method::Head {
