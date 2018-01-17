@@ -9,7 +9,7 @@ keywords = ["http", "file", "range"]
 categories = ["web-programming::http-server"]
 
 [badges]
-travis-ci = { repository = "scottlamb/http-entity" }
+travis-ci = { repository = "scottlamb/http-serve" }
 
 [dependencies]
 flate2 = "1.0"
