@@ -6,17 +6,28 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+extern crate flate2;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate hyper;
 extern crate mime;
 extern crate smallvec;
 extern crate time;
+extern crate unicase;
 
 use futures::Stream;
 use hyper::Error;
 use hyper::header;
 use std::ops::Range;
+
+mod chunker;
+mod file;
+mod gzip;
+mod serving;
+
+pub use file::ChunkedReadFile;
+pub use gzip::BodyWriter;
+pub use serving::serve;
 
 /// A read-only HTTP entity for GET and HEAD serving.
 pub trait Entity: 'static + Send {
@@ -69,8 +80,109 @@ pub trait Entity: 'static + Send {
     fn last_modified(&self) -> Option<header::HttpDate>;
 }
 
-mod file;
-mod serving;
+/// Returns iff it's preferable to use `Content-Encoding: gzip` when responding to the given
+/// request, rather than no content coding.
+///
+/// Use via `should_gzip(req.headers().get())`.
+///
+/// Follows the rules of [RFC 7231 section
+/// 5.3.4](https://tools.ietf.org/html/rfc7231#section-5.3.4).
+pub fn should_gzip(ae: Option<&header::AcceptEncoding>) -> bool {
+    let qis = match ae {
+        None => return false,
+        Some(&header::AcceptEncoding(ref qis)) => qis,
+    };
+    let (mut gzip_q, mut identity_q, mut star_q) = (None, None, None);
+    for qi in qis {
+        match qi.item {
+            header::Encoding::Gzip => {
+                gzip_q = Some(qi.quality);
+            }
+            header::Encoding::Identity => {
+                identity_q = Some(qi.quality);
+            }
+            header::Encoding::EncodingExt(ref e) if e == "*" => {
+                star_q = Some(qi.quality);
+            }
+            _ => {}
+        };
+    }
 
-pub use file::ChunkedReadFile;
-pub use serving::serve;
+    let gzip_q = gzip_q.or(star_q).unwrap_or(header::q(0));
+
+    // "If the representation has no content-coding, then it is
+    // acceptable by default unless specifically excluded by the
+    // Accept-Encoding field stating either "identity;q=0" or "*;q=0"
+    // without a more specific entry for "identity"."
+    let identity_q = identity_q.or(star_q).unwrap_or(header::q(1));
+
+    gzip_q > header::q(0) && gzip_q >= identity_q
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn should_gzip() {
+        use hyper::header::{q, qitem, AcceptEncoding, Encoding, QualityItem};
+
+        // "A request without an Accept-Encoding header field implies that the
+        // user agent has no preferences regarding content-codings. Although
+        // this allows the server to use any content-coding in a response, it
+        // does not imply that the user agent will be able to correctly process
+        // all encodings." Identity seems safer; don't gzip.
+        assert!(!super::should_gzip(None));
+
+        // "If the representation's content-coding is one of the
+        // content-codings listed in the Accept-Encoding field, then it is
+        // acceptable unless it is accompanied by a qvalue of 0.  (As
+        // defined in Section 5.3.1, a qvalue of 0 means "not acceptable".)"
+        assert!(super::should_gzip(Some(&AcceptEncoding(vec![
+            qitem(Encoding::Gzip),
+        ]))));
+        assert!(super::should_gzip(Some(&AcceptEncoding(vec![
+            QualityItem::new(Encoding::Gzip, q(0.001)),
+        ]))));
+        assert!(!super::should_gzip(Some(&AcceptEncoding(vec![
+            QualityItem::new(Encoding::Gzip, q(0)),
+        ]))));
+
+        // "An Accept-Encoding header field with a combined field-value that is
+        // empty implies that the user agent does not want any content-coding in
+        // response."
+        assert!(!super::should_gzip(Some(&AcceptEncoding(vec![]))));
+
+        // "The asterisk "*" symbol in an Accept-Encoding field
+        // matches any available content-coding not explicitly listed in the
+        // header field."
+        assert!(super::should_gzip(Some(&AcceptEncoding(vec![
+            qitem(Encoding::EncodingExt("*".to_owned())),
+        ]))));
+        assert!(!super::should_gzip(Some(&AcceptEncoding(vec![
+            QualityItem::new(Encoding::Gzip, q(0)),
+            qitem(Encoding::EncodingExt("*".to_owned())),
+        ]))));
+        assert!(super::should_gzip(Some(&AcceptEncoding(vec![
+            QualityItem::new(Encoding::Identity, q(0)),
+            qitem(Encoding::EncodingExt("*".to_owned())),
+        ]))));
+
+        // "If multiple content-codings are acceptable, then the acceptable
+        // content-coding with the highest non-zero qvalue is preferred."
+        assert!(super::should_gzip(Some(&AcceptEncoding(vec![
+            QualityItem::new(Encoding::Identity, q(0.5)),
+            QualityItem::new(Encoding::Gzip, q(1.0)),
+        ]))));
+        assert!(!super::should_gzip(Some(&AcceptEncoding(vec![
+            QualityItem::new(Encoding::Identity, q(1.0)),
+            QualityItem::new(Encoding::Gzip, q(0.5)),
+        ]))));
+
+        // "If an Accept-Encoding header field is present in a request
+        // and none of the available representations for the response have a
+        // content-coding that is listed as acceptable, the origin server SHOULD
+        // send a response without any content-coding."
+        assert!(!super::should_gzip(Some(&AcceptEncoding(vec![
+            QualityItem::new(Encoding::EncodingExt("*".to_owned()), q(0.0)),
+        ]))));
+    }
+}
