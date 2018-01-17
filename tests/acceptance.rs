@@ -7,7 +7,7 @@
 // except according to those terms.
 
 extern crate futures;
-extern crate http_entity;
+extern crate http_serve;
 extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
@@ -37,7 +37,7 @@ struct FakeEntity {
     last_modified: hyper::header::HttpDate,
 }
 
-impl http_entity::Entity for &'static FakeEntity {
+impl http_serve::Entity for &'static FakeEntity {
     type Chunk = Vec<u8>;
     type Body = Body;
 
@@ -80,7 +80,7 @@ impl hyper::server::Service for MyService {
             "/weak" => &*ENTITY_WEAK_ETAG,
             p => panic!("unexpected path {}", p),
         };
-        futures::future::ok(http_entity::serve(entity, &req))
+        futures::future::ok(http_serve::serve(entity, &req))
     }
 }
 

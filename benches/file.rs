@@ -10,8 +10,7 @@
 
 extern crate futures;
 extern crate futures_cpupool;
-extern crate http_entity;
-extern crate http_file;
+extern crate http_serve;
 extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
@@ -42,8 +41,8 @@ impl hyper::server::Service for MyService {
     fn call(&self, req: Request) -> Self::Future {
         let construction = move || {
             let f = File::open(&*PATH.lock().unwrap())?;
-            let f = http_file::ChunkedReadFile::new(f, Some(POOL.clone()), mime::TEXT_PLAIN)?;
-            Ok(http_entity::serve(f, &req))
+            let f = http_serve::ChunkedReadFile::new(f, Some(POOL.clone()), mime::TEXT_PLAIN)?;
+            Ok(http_serve::serve(f, &req))
         };
         Box::new(POOL.spawn_fn(construction))
     }

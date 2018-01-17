@@ -6,21 +6,15 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate futures;
-extern crate futures_cpupool;
-extern crate http_entity;
-extern crate hyper;
-extern crate mime;
-
 use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
-use http_entity::Entity;
 use hyper::header;
 use std::io;
 use std::ops::Range;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Arc;
 use std::time::{self, SystemTime};
+use Entity;
 
 // This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
 // a tradeoff between memory usage and thread handoffs.
@@ -39,7 +33,7 @@ struct ChunkedReadFileInner {
     inode: u64,
     mtime: SystemTime,
     content_type: ::mime::Mime,
-    f: std::fs::File,
+    f: ::std::fs::File,
     pool: Option<CpuPool>,
 }
 
@@ -74,8 +68,8 @@ impl<B, C> Entity for ChunkedReadFile<B, C>
 where
     B: 'static
         + Send
-        + Stream<Item = C, Error = hyper::Error>
-        + From<Box<Stream<Item = C, Error = hyper::Error> + Send>>,
+        + Stream<Item = C, Error = ::hyper::Error>
+        + From<Box<Stream<Item = C, Error = ::hyper::Error> + Send>>,
     C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]>,
 {
     type Chunk = C;
@@ -105,7 +99,7 @@ where
                 )))
             });
 
-        let stream: Box<Stream<Item = C, Error = hyper::Error> + Send> = match self.inner.pool {
+        let stream: Box<Stream<Item = C, Error = ::hyper::Error> + Send> = match self.inner.pool {
             Some(ref p) => {
                 let (snd, rcv) = ::futures::sync::mpsc::channel(0);
                 p.spawn(snd.send_all(stream.then(Ok))).forget();
@@ -150,13 +144,13 @@ mod tests {
 
     use futures::{Future, Stream};
     use futures_cpupool::CpuPool;
-    use http_entity::Entity;
+    use super::Entity;
     use hyper::Error;
     use self::tempdir::TempDir;
     use std::io::Write;
     use std::fs::File;
     use super::ChunkedReadFile;
-    use super::mime;
+    use mime;
 
     type Body = Box<Stream<Item = Vec<u8>, Error = Error> + Send>;
 

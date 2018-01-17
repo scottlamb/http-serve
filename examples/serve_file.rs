@@ -21,8 +21,7 @@
 extern crate env_logger;
 extern crate futures;
 extern crate futures_cpupool;
-extern crate http_entity;
-extern crate http_file;
+extern crate http_serve;
 extern crate hyper;
 extern crate leak;
 extern crate mime;
@@ -51,8 +50,8 @@ impl hyper::server::Service for MyService {
         let ctx = self.0;
         Box::new(ctx.pool.spawn_fn(move || {
             let f = ::std::fs::File::open(&ctx.path)?;
-            let f = http_file::ChunkedReadFile::new(f, Some(ctx.pool.clone()), mime::TEXT_PLAIN)?;
-            Ok(http_entity::serve(f, &req))
+            let f = http_serve::ChunkedReadFile::new(f, Some(ctx.pool.clone()), mime::TEXT_PLAIN)?;
+            Ok(http_serve::serve(f, &req))
         }))
     }
 }
