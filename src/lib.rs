@@ -183,10 +183,9 @@ where
         }
 
         if self.gzip_level > 0 {
-            self.resp.headers_mut().set(header::ContentEncoding(vec![
-                header::Encoding::Gzip,
-                header::Encoding::Chunked,
-            ]));
+            self.resp
+                .headers_mut()
+                .set(header::ContentEncoding(vec![header::Encoding::Gzip]));
         }
 
         if !self.body_needed {

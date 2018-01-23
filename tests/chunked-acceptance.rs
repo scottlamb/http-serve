@@ -176,10 +176,7 @@ fn manual_gzip() {
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"\x1f\x8b", &buf[..2]); // gzip magic number.
     assert_eq!(
-        Some(&header::ContentEncoding(vec![
-            header::Encoding::Gzip,
-            header::Encoding::Chunked,
-        ])),
+        Some(&header::ContentEncoding(vec![header::Encoding::Gzip])),
         resp.headers().get()
     );
 }
