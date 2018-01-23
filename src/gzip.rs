@@ -6,9 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use hyper::{self, header};
-use hyper::server::Response;
 use chunker;
+use futures::Stream;
+use hyper::Error;
 use std::mem;
 use std::io::{self, Write};
 
@@ -46,30 +46,28 @@ impl<Chunk> BodyWriter<Chunk>
 where
     Chunk: From<Vec<u8>> + Send + 'static,
 {
-    pub fn new<Body>(ae: Option<&header::AcceptEncoding>) -> (Self, Response<Body>)
-    where
-        Body: From<Box<::futures::Stream<Item = Chunk, Error = hyper::Error> + Send>>,
-    {
-        let (raw, body) = chunker::BodyWriter::with_chunk_size(4096);
-        let should_gzip = super::should_gzip(ae);
-        let mut resp = Response::<Body>::new()
-            .with_body(body)
-            .with_header(header::Vary::Items(vec![
-                ::unicase::Ascii::new("accept-encoding".to_owned()),
-            ]));
-        let inner = match should_gzip {
-            true => {
-                resp.headers_mut().set(header::ContentEncoding(vec![
-                    header::Encoding::Gzip,
-                    header::Encoding::Chunked,
-                ]));
-                Inner::Gzipped(
-                    ::flate2::GzBuilder::new().write(raw, ::flate2::Compression::fast()),
-                )
-            }
-            false => Inner::Raw(raw),
-        };
-        (BodyWriter(inner), resp)
+    pub(crate) fn raw(
+        chunk_size: usize,
+    ) -> (
+        Self,
+        Box<Stream<Item = Chunk, Error = Error> + Send + 'static>,
+    ) {
+        let (raw, body) = chunker::BodyWriter::with_chunk_size(chunk_size);
+        (BodyWriter(Inner::Raw(raw)), body)
+    }
+
+    pub(crate) fn gzipped(
+        chunk_size: usize,
+        level: ::flate2::Compression,
+    ) -> (
+        Self,
+        Box<Stream<Item = Chunk, Error = Error> + Send + 'static>,
+    ) {
+        let (raw, body) = chunker::BodyWriter::with_chunk_size(chunk_size);
+        (
+            BodyWriter(Inner::Gzipped(::flate2::GzBuilder::new().write(raw, level))),
+            body,
+        )
     }
 
     /// Causes the HTTP connection to be dropped abruptly.
@@ -110,19 +108,3 @@ where
         r
     }
 }
-
-/*impl<Chunk> Drop for BodyWriter<Chunk> where Chunk: From<Vec<u8>> + Send + 'static {
-    fn drop(&mut self) {
-        let mut w = match mem::replace(&mut self.0, Inner::Dead) {
-            Inner::Dead => return,
-            Inner::Raw(w) => w,
-            Inner::Gzipped(g) => {
-                match g.finish() {
-                    Ok(w) => w,
-                    Err(_) => return,
-                }
-            },
-        };
-        let _ = w.flush();
-    }
-}*/

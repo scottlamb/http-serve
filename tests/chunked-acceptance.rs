@@ -21,7 +21,7 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
 
-type Body = Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send>;
+type Body = Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send + 'static>;
 
 struct MyService(tokio::reactor::Handle);
 
@@ -33,7 +33,8 @@ impl hyper::server::Service for MyService {
 
     fn call(&self, req: hyper::server::Request) -> Self::Future {
         let cmds = CMDS.lock().unwrap().remove(req.uri().path()).unwrap();
-        let (mut w, resp) = http_serve::BodyWriter::new(req.headers().get());
+        let mut resp: Self::Response = Self::Response::new();
+        let mut w = http_serve::streaming_body(&req, &mut resp).build().unwrap();
         self.0.spawn(cmds.for_each(move |cmd| {
             match cmd {
                 Cmd::WriteAll(s) => w.write_all(s).unwrap(),
@@ -68,12 +69,17 @@ fn new_server() -> Server {
         let h = core.handle();
         let addr = srv.incoming_ref().local_addr();
         core.handle().spawn(srv.for_each(move |conn| {
-            h.spawn(conn.map(|_| ()).map_err(|err| println!("srv error: {:?}", err)));
+            h.spawn(
+                conn.map(|_| ())
+                    .map_err(|err| println!("srv error: {:?}", err)),
+            );
             Ok(())
         }).map_err(|_| ()));
-        server_tx.send(Server {
-            addr: format!("http://{}:{}", addr.ip(), addr.port()),
-        }).unwrap();
+        server_tx
+            .send(Server {
+                addr: format!("http://{}:{}", addr.ip(), addr.port()),
+            })
+            .unwrap();
         core.run(futures::future::empty::<(), ()>()).unwrap();
     });
     server_rx.recv().unwrap()
@@ -87,8 +93,10 @@ lazy_static! {
     static ref SERVER: Server = { new_server() };
 }
 
-fn setup_req(path: &'static str, auto_gzip: bool)
-             -> (UnboundedSender<Cmd>, reqwest::RequestBuilder) {
+fn setup_req(
+    path: &'static str,
+    auto_gzip: bool,
+) -> (UnboundedSender<Cmd>, reqwest::RequestBuilder) {
     let (tx, rx) = mpsc::unbounded();
     CMDS.lock().unwrap().insert(path, rx);
     let client = reqwest::Client::builder().gzip(auto_gzip).build().unwrap();
@@ -114,10 +122,14 @@ fn basic(path: &'static str, auto_gzip: bool) {
 }
 
 #[test]
-fn no_gzip() { basic("/no_gzip", false); }
+fn no_gzip() {
+    basic("/no_gzip", false);
+}
 
 #[test]
-fn auto_gzip() { basic("/auto_gzip", true); }
+fn auto_gzip() {
+    basic("/auto_gzip", true);
+}
 
 fn abort(path: &'static str, auto_gzip: bool) {
     let _ = env_logger::init();
@@ -132,32 +144,37 @@ fn abort(path: &'static str, auto_gzip: bool) {
     assert_eq!(b"1234", &buf);
 
     cmds.unbounded_send(Cmd::Abort).unwrap();
-    assert_eq!(io::ErrorKind::UnexpectedEof, resp.read(&mut buf).unwrap_err().kind());
+    assert_eq!(
+        io::ErrorKind::UnexpectedEof,
+        resp.read(&mut buf).unwrap_err().kind()
+    );
 }
 
 #[test]
-fn no_gzip_abort() { abort("/no_gzip_abort", false); }
+fn no_gzip_abort() {
+    abort("/no_gzip_abort", false);
+}
 
 #[test]
-fn auto_gzip_abort() { abort("/auto_gzip_abort", true); }
+fn auto_gzip_abort() {
+    abort("/auto_gzip_abort", true);
+}
 
 #[test]
 fn manual_gzip() {
     use reqwest::header;
     let _ = env_logger::init();
     let (cmds, mut req) = setup_req("/manual_gzip", false);
-    let mut resp = req
-        .header(header::AcceptEncoding(vec![
-            header::qitem(header::Encoding::Gzip),
-        ]))
-        .send()
+    let mut resp = req.header(header::AcceptEncoding(vec![
+        header::qitem(header::Encoding::Gzip),
+    ])).send()
         .unwrap();
 
     cmds.unbounded_send(Cmd::WriteAll(b"1234")).unwrap();
     drop(cmds);
     let mut buf = Vec::new();
     resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"\x1f\x8b", &buf[..2]);  // gzip magic number.
+    assert_eq!(b"\x1f\x8b", &buf[..2]); // gzip magic number.
     assert_eq!(
         Some(&header::ContentEncoding(vec![
             header::Encoding::Gzip,

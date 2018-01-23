@@ -18,6 +18,7 @@ extern crate unicase;
 use futures::Stream;
 use hyper::Error;
 use hyper::header;
+use hyper::server::{Request, Response};
 use std::ops::Range;
 
 mod chunker;
@@ -117,6 +118,88 @@ pub fn should_gzip(ae: Option<&header::AcceptEncoding>) -> bool {
     let identity_q = identity_q.or(star_q).unwrap_or(header::q(1));
 
     gzip_q > header::q(0) && gzip_q >= identity_q
+}
+
+pub struct StreamingBodyBuilder<'r, Chunk: 'static> {
+    resp: &'r mut Response<Box<Stream<Item = Chunk, Error = Error> + Send + 'static>>,
+    chunk_size: usize,
+    gzip_level: u32,
+    body_needed: bool,
+}
+
+/// Adds a streaming body to the given request if a body is needed.
+///
+/// Currently the body is added for non-HEAD requests. In the future, this may also follow
+/// conditional GET rules, omitting the body and stripping out entity headers from the response as
+/// desired.
+pub fn streaming_body<'r, Chunk>(
+    req: &Request,
+    resp: &'r mut Response<Box<Stream<Item = Chunk, Error = Error> + Send + 'static>>,
+) -> StreamingBodyBuilder<'r, Chunk>
+where
+    Chunk: From<Vec<u8>> + Send + 'static,
+{
+    StreamingBodyBuilder {
+        resp,
+        chunk_size: 4096,
+        gzip_level: match should_gzip(req.headers().get()) {
+            true => 6,
+            false => 0,
+        },
+        body_needed: *req.method() != hyper::Method::Head,
+    }
+}
+
+impl<'r, Chunk> StreamingBodyBuilder<'r, Chunk>
+where
+    Chunk: From<Vec<u8>> + Send + 'static,
+{
+    pub fn with_chunk_size(self, chunk_size: usize) -> Self {
+        StreamingBodyBuilder { chunk_size, ..self }
+    }
+
+    pub fn with_gzip_level(self, level: u32) -> Self {
+        StreamingBodyBuilder {
+            gzip_level: if self.gzip_level == 0 { 0 } else { level },
+            ..self
+        }
+    }
+
+    pub fn build(self) -> Option<BodyWriter<Chunk>> {
+        // Ensure there's a "Vary: accept-encoding" header. Add this item to the list if the
+        // header is already present; add the header if absent.
+        let add_hdr = match self.resp.headers_mut().get_mut() {
+            Some(&mut header::Vary::Items(ref mut i)) => {
+                i.push(::unicase::Ascii::new("accept-encoding".to_owned()));
+                false
+            }
+            Some(&mut header::Vary::Any) => false,
+            None => true,
+        };
+        if add_hdr {
+            self.resp.headers_mut().set(header::Vary::Items(vec![
+                ::unicase::Ascii::new("accept-encoding".to_owned()),
+            ]));
+        }
+
+        if self.gzip_level > 0 {
+            self.resp.headers_mut().set(header::ContentEncoding(vec![
+                header::Encoding::Gzip,
+                header::Encoding::Chunked,
+            ]));
+        }
+
+        if !self.body_needed {
+            return None;
+        }
+
+        let (bw, body) = match self.gzip_level > 0 {
+            true => BodyWriter::gzipped(self.chunk_size, flate2::Compression::new(self.gzip_level)),
+            false => BodyWriter::raw(self.chunk_size),
+        };
+        self.resp.set_body(body);
+        Some(bw)
+    }
 }
 
 #[cfg(test)]
