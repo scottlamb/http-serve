@@ -6,6 +6,65 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+//! Helpers for serving HTTP GET and HEAD responses with [hyper](https://crates.io/crates/hyper)
+//! 0.11.x and [tokio](https://crates.io/crates/tokio). A future version is likely to switch to
+//! the interface of the [http](http://crates.io/crates/http) crate.
+//!
+//! This crate supplies two ways to respond to HTTP GET and HEAD requests:
+//!
+//! *   the `serve` function can be used to serve an `Entity`, a trait representing reusable,
+//!     byte-rangeable HTTP entities. `Entity` must be able to produce exactly the same data on
+//!     every call, know its size in advance, and be able to produce portions of the data on demand.
+//! *   the `streaming_body` function can be used to add a body to an otherwise-complete response.
+//!     If a body is needed, it returns a `BodyWriter` (which implements `std::io::Writer`). The
+//!     caller should produce the complete body or call `BodyWriter::abort`, causing the HTTP
+//!     stream to terminate abruptly.
+//!
+//! # Why two ways?
+//!
+//! They have pros and cons. This chart shows some of them:
+//!
+//! <table>
+//!   <tr><th><th><code>serve</code><th><code>streaming_body</code></tr>
+//!   <tr><td>automatic byte range serving<td>yes<td>no (always sends full body)</tr>
+//!   <tr><td>backpressure<td>yes<td>no</tr>
+//!   <tr><td>conditional GET<td>yes<td>unimplemented (always sends body)</tr>
+//!   <tr><td>sends first byte before length known<td>no<td>yes</tr>
+//!   <tr><td>automatic gzip content encoding<td>no<td>yes</tr>
+//! </table>
+//!
+//! Use `serve` when:
+//!
+//! *   metadata (length, etag, etc) and byte ranges can be regenerated cheaply and consistently
+//!     via a lazy `Entity`.
+//! *   data can be fully buffered in memory or on disk and reused many times. You may want to
+//!     create a pair of buffers for gzipped (for user-agents which specify `Accept-Encoding:
+//!     gzip`) vs raw.
+//!
+//! Consider `streaming_body` if data would be fully buffered each time a response is sent.
+//!
+//! Once you return a `hyper::server::Response` to hyper, your only way to signal error to the
+//! client is to abruptly close the HTTP connection while sending the body. If you want the ability
+//! to return a well-formatted error to the client while producing body bytes, you must buffer the
+//! entire body in-memory before returning anything to hyper.
+//!
+//! If you are buffering a response in memory, `serve` requires copying the bytes (when using
+//! `Chunk = Vec<u8>` or similar) or atomic reference-counting (with `Chunk = Arc<Vec<u8>>` or
+//! similar). `streaming_body` doesn't need to keep its own copy for potential future use; it may
+//! be cheaper because it can simply hand ownership of the existing `Vec<u8>`s to hyper.
+//!
+//! # Why the weird type bounds? Why not use `hyper::Body` and `hyper::Chunk` for everything?
+//!
+//! `hyper::Chunk` is fine in most cases. There are times when it's desirable to have more flexible
+//! ownership provided by a type such as `reffers::ARefs<'static, [u8]>`. One is `mmap`-based
+//! file serving: a `hyper::Chunk` would require copying the data in each chunk. An implementation
+//! with `ARefs` could instead `mmap` and `mlock` the data on another thread and provide chunks
+//! which `munmap` when dropped.
+//!
+//! `hyper::Body` unfortunately can't be used with either `serve` or `streaming_body`; they need a
+//! `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send + 'static>` or something
+//! that can be constructed from that type.
+
 extern crate flate2;
 extern crate futures;
 extern crate futures_cpupool;
@@ -30,7 +89,8 @@ pub use file::ChunkedReadFile;
 pub use gzip::BodyWriter;
 pub use serving::serve;
 
-/// A read-only HTTP entity for GET and HEAD serving.
+/// A reusable, read-only, byte-rangeable HTTP entity for GET and HEAD serving.
+/// Must return exactly the same data on every call.
 pub trait Entity: 'static + Send {
     /// The type of a chunk.
     ///
@@ -39,10 +99,7 @@ pub trait Entity: 'static + Send {
     type Chunk: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]>;
 
     /// The type of the body stream. Commonly
-    /// `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send>`.
-    ///
-    /// Note: unfortunately `::hyper::Body` is not possible because it doesn't implement
-    /// `From<Box<Stream...>>`.
+    /// `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send + 'static>`.
     type Body: 'static
         + Send
         + Stream<Item = Self::Chunk, Error = Error>
