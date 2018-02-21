@@ -7,6 +7,7 @@
 // except according to those terms.
 
 extern crate futures;
+extern crate http;
 extern crate http_serve;
 extern crate hyper;
 #[macro_use]
@@ -52,10 +53,14 @@ impl http_serve::Entity for &'static FakeEntity {
             [range.start as usize..range.end as usize]
             .into())))
     }
-    fn add_headers(&self, headers: &mut ::hyper::header::Headers) {
-        headers.set(::hyper::header::ContentType(
-            hyper::mime::APPLICATION_OCTET_STREAM,
-        ));
+    fn add_headers(&self, headers: &mut http::header::HeaderMap) {
+        headers.insert(
+            http::header::CONTENT_TYPE,
+            hyper::mime::APPLICATION_OCTET_STREAM
+                .as_ref()
+                .parse()
+                .unwrap(),
+        );
     }
     fn etag(&self) -> Option<hyper::header::EntityTag> {
         self.etag.clone()
@@ -252,12 +257,12 @@ fn serve_without_etag() {
         "\
          \r\n--B\r\n\
          Content-Range: bytes 0-1/240\r\n\
-         Content-Type: application/octet-stream\r\n\
+         content-type: application/octet-stream\r\n\
          \r\n\
          01\r\n\
          --B\r\n\
          Content-Range: bytes 3-4/240\r\n\
-         Content-Type: application/octet-stream\r\n\
+         content-type: application/octet-stream\r\n\
          \r\n\
          34\r\n\
          --B--\r\n"[..],
