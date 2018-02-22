@@ -17,8 +17,9 @@ use std::sync::Arc;
 use std::time::{self, SystemTime};
 use Entity;
 
-// This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
-// a tradeoff between memory usage and thread handoffs.
+// This stream breaks apart the file into chunks of CHUNK_SIZE. This size is
+// a tradeoff between memory usage and thread handoffs. This value might be
+// overridden by the file system if it reports a larger IO block size.
 static CHUNK_SIZE: u64 = 65_536;
 
 /// A HTTP entity created from a `std::fs::File` which reads the file
@@ -30,6 +31,7 @@ pub struct ChunkedReadFile<B, C> {
 }
 
 struct ChunkedReadFileInner {
+    chunk_size: u64,
     len: u64,
     inode: u64,
     mtime: SystemTime,
@@ -51,8 +53,11 @@ impl<B, C> ChunkedReadFile<B, C> {
         headers: http::header::HeaderMap,
     ) -> Result<Self, io::Error> {
         let m = file.metadata()?;
+        let chunk_size = ::std::cmp::max(m.blksize(), CHUNK_SIZE);
+        let chunk_size = ::std::cmp::min(chunk_size, m.len());
         Ok(ChunkedReadFile {
             inner: Arc::new(ChunkedReadFileInner {
+                chunk_size: chunk_size,
                 len: m.len(),
                 inode: m.ino(),
                 mtime: m.modified()?,
@@ -86,7 +91,7 @@ where
                 if left.start == left.end {
                     return None;
                 }
-                let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
+                let chunk_size = ::std::cmp::min(inner.chunk_size, left.end - left.start) as usize;
                 let mut chunk = Vec::with_capacity(chunk_size);
                 unsafe { chunk.set_len(chunk_size) };
                 let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
