@@ -71,6 +71,7 @@ extern crate futures_cpupool;
 extern crate http;
 extern crate hyper;
 extern crate mime;
+extern crate parking_lot;
 extern crate smallvec;
 extern crate time;
 extern crate unicase;

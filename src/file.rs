@@ -10,6 +10,8 @@ use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
 use http;
 use hyper::header;
+use parking_lot::Mutex;
+use std::cell::RefCell;
 use std::io;
 use std::ops::Range;
 use std::os::unix::fs::{FileExt, MetadataExt};
@@ -35,7 +37,7 @@ struct ChunkedReadFileInner {
     mtime: SystemTime,
     f: ::std::fs::File,
     pool: Option<CpuPool>,
-    headers: http::header::HeaderMap,
+    headers: Mutex<RefCell<http::header::HeaderMap>>,
 }
 
 impl<B, C> ChunkedReadFile<B, C> {
@@ -56,7 +58,7 @@ impl<B, C> ChunkedReadFile<B, C> {
                 len: m.len(),
                 inode: m.ino(),
                 mtime: m.modified()?,
-                headers,
+                headers: Mutex::new(RefCell::new(headers)),
                 f: file,
                 pool: pool,
             }),
@@ -115,12 +117,11 @@ where
     }
 
     fn add_headers(&self, h: &mut http::header::HeaderMap) {
-        h.extend(
-            self.inner
-                .headers
-                .iter()
-                .map(|(k, v)| (k.clone(), v.clone())),
-        );
+        let headers = self.inner
+            .headers
+            .lock()
+            .replace(http::header::HeaderMap::new());
+        h.extend(headers);
     }
 
     fn etag(&self) -> Option<header::EntityTag> {
