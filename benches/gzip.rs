@@ -71,7 +71,10 @@ fn serve(b: &mut test::Bencher, level: u32) {
     // Should be plenty for effective or ineffective compression.
     let mut buf = Vec::with_capacity(WONDERLAND.len());
     let mut run = || {
-        let mut resp = client.get(&format!("{}/{}", &*SERVER, level)).send().unwrap();
+        let mut resp = client
+            .get(&format!("{}/{}", &*SERVER, level))
+            .send()
+            .unwrap();
         buf.clear();
         let size = resp.read_to_end(&mut buf).unwrap();
         assert_eq!(reqwest::StatusCode::Ok, resp.status());
@@ -83,31 +86,51 @@ fn serve(b: &mut test::Bencher, level: u32) {
 }
 
 #[bench]
-fn serve_gzip_level_0(b: &mut test::Bencher) { serve(b, 0); }
+fn serve_gzip_level_0(b: &mut test::Bencher) {
+    serve(b, 0);
+}
 
 #[bench]
-fn serve_gzip_level_1(b: &mut test::Bencher) { serve(b, 1); }
+fn serve_gzip_level_1(b: &mut test::Bencher) {
+    serve(b, 1);
+}
 
 #[bench]
-fn serve_gzip_level_2(b: &mut test::Bencher) { serve(b, 2); }
+fn serve_gzip_level_2(b: &mut test::Bencher) {
+    serve(b, 2);
+}
 
 #[bench]
-fn serve_gzip_level_3(b: &mut test::Bencher) { serve(b, 3); }
+fn serve_gzip_level_3(b: &mut test::Bencher) {
+    serve(b, 3);
+}
 
 #[bench]
-fn serve_gzip_level_4(b: &mut test::Bencher) { serve(b, 4); }
+fn serve_gzip_level_4(b: &mut test::Bencher) {
+    serve(b, 4);
+}
 
 #[bench]
-fn serve_gzip_level_5(b: &mut test::Bencher) { serve(b, 5); }
+fn serve_gzip_level_5(b: &mut test::Bencher) {
+    serve(b, 5);
+}
 
 #[bench]
-fn serve_gzip_level_6(b: &mut test::Bencher) { serve(b, 6); }
+fn serve_gzip_level_6(b: &mut test::Bencher) {
+    serve(b, 6);
+}
 
 #[bench]
-fn serve_gzip_level_7(b: &mut test::Bencher) { serve(b, 7); }
+fn serve_gzip_level_7(b: &mut test::Bencher) {
+    serve(b, 7);
+}
 
 #[bench]
-fn serve_gzip_level_8(b: &mut test::Bencher) { serve(b, 8); }
+fn serve_gzip_level_8(b: &mut test::Bencher) {
+    serve(b, 8);
+}
 
 #[bench]
-fn serve_gzip_level_9(b: &mut test::Bencher) { serve(b, 9); }
+fn serve_gzip_level_9(b: &mut test::Bencher) {
+    serve(b, 9);
+}

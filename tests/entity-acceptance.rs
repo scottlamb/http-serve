@@ -108,15 +108,15 @@ const LATER_DATE_STR: &str = "Sun, 06 Nov 1994 09:49:37 GMT";
 lazy_static! {
     static ref SOME_DATE: reqwest::header::HttpDate = { SOME_DATE_STR.parse().unwrap() };
     static ref LATER_DATE: reqwest::header::HttpDate = { LATER_DATE_STR.parse().unwrap() };
-    static ref ENTITY_NO_ETAG: FakeEntity = FakeEntity{
+    static ref ENTITY_NO_ETAG: FakeEntity = FakeEntity {
         etag: None,
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
-    static ref ENTITY_STRONG_ETAG: FakeEntity = FakeEntity{
+    static ref ENTITY_STRONG_ETAG: FakeEntity = FakeEntity {
         etag: Some(hyper::header::EntityTag::strong("foo".to_owned())),
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
-    static ref ENTITY_WEAK_ETAG: FakeEntity = FakeEntity{
+    static ref ENTITY_WEAK_ETAG: FakeEntity = FakeEntity {
         etag: Some(hyper::header::EntityTag::strong("foo".to_owned())),
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
