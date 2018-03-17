@@ -15,7 +15,8 @@ travis-ci = { repository = "scottlamb/http-serve" }
 flate2 = "1.0"
 futures = "0.1.7"
 futures-cpupool = "0.1"
-hyper = "0.11"
+http = "0.1"
+hyper = { version = "0.11", features = ["compat"] }
 mime = "0.3"
 smallvec = "0.6"
 time = "0.1"

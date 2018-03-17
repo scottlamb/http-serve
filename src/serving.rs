@@ -9,10 +9,10 @@
 use futures::{self, Stream};
 use futures::stream;
 use futures::future;
+use http;
 use hyper::{self, Error, Method};
 use hyper::header;
 use hyper::server::{Request, Response};
-use mime;
 use smallvec::SmallVec;
 use super::Entity;
 use std::cmp;
@@ -121,7 +121,6 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
         )));
         return Response::new()
             .with_status(hyper::StatusCode::MethodNotAllowed)
-            .with_header(header::ContentType(mime::TEXT_PLAIN))
             .with_header(header::Allow(vec![Method::Get, Method::Head]))
             .with_body(body);
     }
@@ -182,7 +181,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
         .set(header::AcceptRanges(vec![header::RangeUnit::Bytes]));
     if let Some(m) = last_modified {
         // See RFC 7232 section 2.2.1 <https://tools.ietf.org/html/rfc7232#section-2.2.1>: the
-        // Last-Modified must not exceed the Date. To guarantee this, setet the Date now (if one
+        // Last-Modified must not exceed the Date. To guarantee this, set the Date now (if one
         // hasn't already been set) rather than let hyper set it.
         let d = if let Some(&header::Date(d)) = res.headers().get() {
             d
@@ -245,7 +244,10 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
         }
     };
     if include_entity_headers {
-        e.add_headers(res.headers_mut());
+        let mut headers = http::header::HeaderMap::new();
+        e.add_headers(&mut headers);
+        let hyper_headers: hyper::header::Headers = headers.into();
+        res.headers_mut().extend(hyper_headers.iter());
     }
     res.headers_mut()
         .set(header::ContentLength(range.end - range.start));
@@ -286,9 +288,10 @@ fn send_multipart<E: Entity>(
     let mut body_len = 0;
     let mut each_part_headers = Vec::with_capacity(128);
     if include_entity_headers {
-        let mut headers = header::Headers::new();
+        let mut headers = http::header::HeaderMap::new();
         e.add_headers(&mut headers);
-        write!(&mut each_part_headers, "{}", &headers).unwrap();
+        let hyper_headers: hyper::header::Headers = headers.into();
+        write!(&mut each_part_headers, "{}", &hyper_headers).unwrap();
     }
     each_part_headers.extend_from_slice(b"\r\n");
 

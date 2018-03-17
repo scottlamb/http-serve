@@ -68,6 +68,7 @@
 extern crate flate2;
 extern crate futures;
 extern crate futures_cpupool;
+extern crate http;
 extern crate hyper;
 extern crate mime;
 extern crate smallvec;
@@ -123,7 +124,7 @@ pub trait Entity: 'static + Send {
     ///
     /// This function will be called only when that section says that headers such as
     /// `Content-Type` should be included in the response.
-    fn add_headers(&self, &mut header::Headers);
+    fn add_headers(&self, &mut http::header::HeaderMap);
 
     /// Returns an etag for this entity, if available.
     /// Implementations are encouraged to provide a strong etag. [RFC 7232 section

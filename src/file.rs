@@ -8,6 +8,7 @@
 
 use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
+use http;
 use hyper::header;
 use std::io;
 use std::ops::Range;
@@ -32,9 +33,9 @@ struct ChunkedReadFileInner {
     len: u64,
     inode: u64,
     mtime: SystemTime,
-    content_type: ::mime::Mime,
     f: ::std::fs::File,
     pool: Option<CpuPool>,
+    headers: http::header::HeaderMap,
 }
 
 impl<B, C> ChunkedReadFile<B, C> {
@@ -47,7 +48,7 @@ impl<B, C> ChunkedReadFile<B, C> {
     pub fn new(
         file: ::std::fs::File,
         pool: Option<CpuPool>,
-        content_type: ::mime::Mime,
+        headers: http::header::HeaderMap,
     ) -> Result<Self, io::Error> {
         let m = file.metadata()?;
         Ok(ChunkedReadFile {
@@ -55,7 +56,7 @@ impl<B, C> ChunkedReadFile<B, C> {
                 len: m.len(),
                 inode: m.ino(),
                 mtime: m.modified()?,
-                content_type: content_type,
+                headers,
                 f: file,
                 pool: pool,
             }),
@@ -113,8 +114,13 @@ where
         stream.into()
     }
 
-    fn add_headers(&self, h: &mut header::Headers) {
-        h.set(header::ContentType(self.inner.content_type.clone()));
+    fn add_headers(&self, h: &mut http::header::HeaderMap) {
+        h.extend(
+            self.inner
+                .headers
+                .iter()
+                .map(|(k, v)| (k.clone(), v.clone())),
+        );
     }
 
     fn etag(&self) -> Option<header::EntityTag> {
@@ -145,12 +151,12 @@ mod tests {
     use futures::{Future, Stream};
     use futures_cpupool::CpuPool;
     use super::Entity;
+    use http;
     use hyper::Error;
     use self::tempdir::TempDir;
     use std::io::Write;
     use std::fs::File;
     use super::ChunkedReadFile;
-    use mime;
 
     type Body = Box<Stream<Item = Vec<u8>, Error = Error> + Send>;
 
@@ -163,7 +169,7 @@ mod tests {
         let crf = ChunkedReadFile::<Body, _>::new(
             File::open(&p).unwrap(),
             pool.clone(),
-            mime::TEXT_PLAIN,
+            http::header::HeaderMap::new(),
         ).unwrap();
         assert_eq!(4, crf.len());
         let etag1 = crf.etag();
@@ -174,8 +180,11 @@ mod tests {
 
         // A ChunkedReadFile constructed from a modified file should have a different etag.
         f.write_all(b"jkl;").unwrap();
-        let crf = ChunkedReadFile::<Body, _>::new(File::open(&p).unwrap(), pool, mime::TEXT_PLAIN)
-            .unwrap();
+        let crf = ChunkedReadFile::<Body, _>::new(
+            File::open(&p).unwrap(),
+            pool,
+            http::header::HeaderMap::new(),
+        ).unwrap();
         assert_eq!(8, crf.len());
         let etag2 = crf.etag();
         assert_ne!(etag1, etag2);
