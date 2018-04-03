@@ -84,17 +84,17 @@ where
         let stream =
             ::futures::stream::unfold((range, Arc::clone(&self.inner)), move |(left, inner)| {
                 if left.start == left.end {
-                    return None;
+                    return ::futures::finished(None);
                 }
                 let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
                 let mut chunk = Vec::with_capacity(chunk_size);
                 unsafe { chunk.set_len(chunk_size) };
                 let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
-                    Err(e) => return Some(Err(e.into())),
+                    Err(e) => return ::futures::failed(e.into()),
                     Ok(b) => b,
                 };
                 chunk.truncate(bytes_read);
-                Some(Ok((
+                ::futures::finished(Some((
                     chunk.into(),
                     (left.start + bytes_read as u64..left.end, inner),
                 )))
