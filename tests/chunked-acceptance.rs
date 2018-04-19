@@ -8,6 +8,7 @@
 
 extern crate env_logger;
 extern crate futures;
+extern crate http;
 extern crate http_serve;
 extern crate hyper;
 #[macro_use]
@@ -15,7 +16,7 @@ extern crate lazy_static;
 extern crate reqwest;
 extern crate tokio_core as tokio;
 
-use futures::{Future, Stream};
+use futures::Stream;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -23,30 +24,33 @@ use std::sync::Mutex;
 
 type Body = Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send + 'static>;
 
-struct MyService(tokio::reactor::Handle);
+struct MyService(tokio::reactor::Remote);
 
 impl hyper::server::Service for MyService {
-    type Request = hyper::server::Request;
-    type Response = hyper::server::Response<Body>;
+    type Request = http::Request<hyper::Body>;
+    type Response = http::Response<Body>;
     type Error = hyper::Error;
     type Future = ::futures::future::FutureResult<Self::Response, hyper::Error>;
 
-    fn call(&self, req: hyper::server::Request) -> Self::Future {
+    fn call(&self, req: Self::Request) -> Self::Future {
         let cmds = CMDS.lock().unwrap().remove(req.uri().path()).unwrap();
-        let mut resp: Self::Response = Self::Response::new();
-        let mut w = http_serve::streaming_body(&req, &mut resp).build().unwrap();
-        self.0.spawn(cmds.for_each(move |cmd| {
-            match cmd {
-                Cmd::WriteAll(s) => w.write_all(s).unwrap(),
-                Cmd::Abort => w.abort(),
-                Cmd::Flush => w.flush().unwrap(),
-            }
-            futures::future::ok(())
-        }));
+        let (resp, w) = http_serve::streaming_body(&req).build();
+        let mut w = w.unwrap();
+        self.0.spawn(|_| {
+            cmds.for_each(move |cmd| {
+                match cmd {
+                    Cmd::WriteAll(s) => w.write_all(s).unwrap(),
+                    Cmd::Abort => w.abort(),
+                    Cmd::Flush => w.flush().unwrap(),
+                }
+                futures::future::ok(())
+            })
+        });
         futures::future::ok(resp)
     }
 }
 
+#[derive(Debug)]
 enum Cmd {
     WriteAll(&'static [u8]),
     Flush,
@@ -59,28 +63,25 @@ struct Server {
 
 fn new_server() -> Server {
     let (server_tx, server_rx) = ::std::sync::mpsc::channel();
+    let (remote_tx, remote_rx) = ::std::sync::mpsc::channel();
+    ::std::thread::spawn(move || {
+        let mut core = tokio::reactor::Core::new().unwrap();
+        remote_tx.send(core.remote()).unwrap();
+        core.run(futures::future::empty::<(), ()>()).unwrap()
+    });
     ::std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
-        let mut core = tokio::reactor::Core::new().unwrap();
-        let h = core.handle();
+        let r = remote_rx.recv().unwrap();
         let srv = hyper::server::Http::new()
-            .serve_addr_handle(&addr, &core.handle(), move || Ok(MyService(h.clone())))
+            .bind_compat(&addr, move || Ok(MyService(r.clone())))
             .unwrap();
-        let h = core.handle();
-        let addr = srv.incoming_ref().local_addr();
-        core.handle().spawn(srv.for_each(move |conn| {
-            h.spawn(
-                conn.map(|_| ())
-                    .map_err(|err| println!("srv error: {:?}", err)),
-            );
-            Ok(())
-        }).map_err(|_| ()));
+        let addr = srv.local_addr().unwrap();
         server_tx
             .send(Server {
                 addr: format!("http://{}:{}", addr.ip(), addr.port()),
             })
             .unwrap();
-        core.run(futures::future::empty::<(), ()>()).unwrap();
+        srv.run().unwrap();
     });
     server_rx.recv().unwrap()
 }

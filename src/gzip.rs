@@ -7,8 +7,6 @@
 // except according to those terms.
 
 use chunker;
-use futures::Stream;
-use hyper::Error;
 use std::mem;
 use std::io::{self, Write};
 
@@ -46,28 +44,12 @@ impl<Chunk> BodyWriter<Chunk>
 where
     Chunk: From<Vec<u8>> + Send + 'static,
 {
-    pub(crate) fn raw(
-        chunk_size: usize,
-    ) -> (
-        Self,
-        Box<Stream<Item = Chunk, Error = Error> + Send + 'static>,
-    ) {
-        let (raw, body) = chunker::BodyWriter::with_chunk_size(chunk_size);
-        (BodyWriter(Inner::Raw(raw)), body)
+    pub(crate) fn raw(raw: chunker::BodyWriter<Chunk>) -> Self {
+        BodyWriter(Inner::Raw(raw))
     }
 
-    pub(crate) fn gzipped(
-        chunk_size: usize,
-        level: ::flate2::Compression,
-    ) -> (
-        Self,
-        Box<Stream<Item = Chunk, Error = Error> + Send + 'static>,
-    ) {
-        let (raw, body) = chunker::BodyWriter::with_chunk_size(chunk_size);
-        (
-            BodyWriter(Inner::Gzipped(::flate2::GzBuilder::new().write(raw, level))),
-            body,
-        )
+    pub(crate) fn gzipped(raw: chunker::BodyWriter<Chunk>, level: ::flate2::Compression) -> Self {
+        BodyWriter(Inner::Gzipped(::flate2::GzBuilder::new().write(raw, level)))
     }
 
     /// Causes the HTTP connection to be dropped abruptly.

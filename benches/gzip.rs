@@ -9,6 +9,7 @@
 #![feature(test)]
 
 extern crate futures;
+extern crate http;
 extern crate http_serve;
 extern crate hyper;
 #[macro_use]
@@ -17,9 +18,9 @@ extern crate mime;
 extern crate reqwest;
 extern crate test;
 
+use http::{Request, Response};
 use http_serve::streaming_body;
 use hyper::Error;
-use hyper::server::{Request, Response};
 use futures::stream::Stream;
 use std::io::{Read, Write};
 use std::str::FromStr;
@@ -29,15 +30,15 @@ static WONDERLAND: &[u8] = include_bytes!("wonderland.txt");
 struct MyService;
 
 impl hyper::server::Service for MyService {
-    type Request = Request;
+    type Request = Request<hyper::Body>;
     type Response = Response<Box<Stream<Item = Vec<u8>, Error = Error> + Send>>;
     type Error = Error;
     type Future = futures::future::FutureResult<Self::Response, Error>;
 
-    fn call(&self, req: Request) -> Self::Future {
-        let mut resp = Response::new();
+    fn call(&self, req: Self::Request) -> Self::Future {
         let l = u32::from_str(&req.uri().path()[1..]).unwrap();
-        if let Some(mut w) = streaming_body(&req, &mut resp).with_gzip_level(l).build() {
+        let (resp, w) = streaming_body(&req).with_gzip_level(l).build();
+        if let Some(mut w) = w {
             w.write_all(WONDERLAND).unwrap();
         }
         futures::future::ok(resp)
@@ -50,7 +51,7 @@ fn new_server() -> String {
     ::std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
         let server = hyper::server::Http::new()
-            .bind(&addr, || Ok(MyService))
+            .bind_compat(&addr, || Ok(MyService))
             .unwrap();
         let addr = server.local_addr().unwrap();
         tx.send(addr).unwrap();
