@@ -79,6 +79,7 @@ use futures::Stream;
 use http::header::{self, HeaderMap, HeaderValue};
 use hyper::Error;
 use std::ops::Range;
+use std::time::SystemTime;
 
 mod chunker;
 mod file;
@@ -130,13 +131,13 @@ pub trait Entity: 'static + Send {
     /// Implementations are encouraged to provide a strong etag. [RFC 7232 section
     /// 2.1](https://tools.ietf.org/html/rfc7232#section-2.1) notes that only strong etags
     /// are usable for sub-range retrieval.
-    fn etag(&self) -> Option<::hyper::header::EntityTag>;
+    fn etag(&self) -> Option<HeaderValue>;
 
     /// Returns the last modified time of this entity, if available.
     /// Note that `serve` may serve an earlier `Last-Modified:` date than the one returned here if
     /// this time is in the future, as required by [RFC 7232 section
     /// 2.2.1](https://tools.ietf.org/html/rfc7232#section-2.2.1).
-    fn last_modified(&self) -> Option<::hyper::header::HttpDate>;
+    fn last_modified(&self) -> Option<SystemTime>;
 }
 
 /// Returns iff it's preferable to use `Content-Encoding: gzip` when responding to the given

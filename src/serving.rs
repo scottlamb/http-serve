@@ -10,6 +10,7 @@ use futures::{self, Stream};
 use futures::stream;
 use futures::future;
 use http;
+use http::header::HeaderValue;
 use hyper::{self, Error, Method};
 use hyper::header;
 use hyper::server::{Request, Response};
@@ -20,14 +21,30 @@ use std::io::Write;
 use std::ops::Range;
 use std::time::SystemTime;
 
+fn weak_etag_eq(mut a: &[u8], mut b: &[u8]) -> bool {
+    if a.starts_with(b"W/") {
+        a = &a[2..];
+    }
+    if b.starts_with(b"W/") {
+        b = &b[2..];
+    }
+    a == b
+}
+
+fn strong_etag_eq(a: &[u8], b: &[u8]) -> bool {
+    a == b && !a.starts_with(b"W/")
+}
+
 /// Returns true if `req` doesn't have an `If-None-Match` header matching `req`.
-fn none_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
+fn none_match(etag: &Option<HeaderValue>, req: &Request) -> bool {
     match req.headers().get::<header::IfNoneMatch>() {
         Some(&header::IfNoneMatch::Any) => false,
         Some(&header::IfNoneMatch::Items(ref items)) => {
             if let Some(ref some_etag) = *etag {
                 for item in items {
-                    if item.weak_eq(some_etag) {
+                    // RFC 7232 section 3.2: A recipient MUST use the weak comparison function when
+                    // comparing entity-tags for If-None-Match
+                    if weak_etag_eq(item.to_string().as_bytes(), some_etag.as_bytes()) {
                         return false;
                     }
                 }
@@ -39,7 +56,7 @@ fn none_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
 }
 
 /// Returns true if `req` has no `If-Match` header or one which matches `etag`.
-fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
+fn any_match(etag: &Option<HeaderValue>, req: &Request) -> bool {
     match req.headers().get::<header::IfMatch>() {
         // The absent header and "If-Match: *" cases differ only when there is no entity to serve.
         // We always have an entity to serve, so consider them identical.
@@ -47,7 +64,7 @@ fn any_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
         Some(&header::IfMatch::Items(ref items)) => {
             if let Some(ref some_etag) = *etag {
                 for item in items {
-                    if item.strong_eq(some_etag) {
+                    if strong_etag_eq(item.to_string().as_bytes(), some_etag.as_bytes()) {
                         return true;
                     }
                 }
@@ -80,7 +97,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     } else if let (Some(ref m), Some(&header::IfUnmodifiedSince(ref since))) =
         (last_modified, req.headers().get())
     {
-        m > since
+        *m > (*since).into()
     } else {
         false
     };
@@ -90,7 +107,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     } else if let (Some(ref m), Some(&header::IfModifiedSince(ref since))) =
         (last_modified, req.headers().get())
     {
-        m <= since
+        *m <= (*since).into()
     } else {
         false
     };
@@ -102,7 +119,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     let include_entity_headers_on_range = match req.headers().get::<header::IfRange>() {
         Some(&header::IfRange::EntityTag(ref if_etag)) => {
             if let Some(ref some_etag) = etag {
-                if if_etag.strong_eq(some_etag) {
+                if strong_etag_eq(if_etag.to_string().as_bytes(), some_etag.as_bytes()) {
                     false
                 } else {
                     range_hdr = None;
@@ -138,10 +155,11 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
             d
         };
         res.headers_mut()
-            .set(header::LastModified(::std::cmp::min(m, d)));
+            .set(header::LastModified(::std::cmp::min(m.into(), d)));
     }
     if let Some(e) = etag {
-        res.headers_mut().set(header::ETag(e));
+        res.headers_mut()
+            .set_raw(http::header::ETAG.as_str(), e.as_bytes());
     }
 
     if precondition_failed {

@@ -9,6 +9,7 @@
 extern crate futures;
 extern crate http;
 extern crate http_serve;
+extern crate httpdate;
 extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
@@ -21,10 +22,12 @@ extern crate reqwest;
 
 use futures::Stream;
 use futures::stream;
+use http::header::HeaderValue;
 use reqwest::header::{self, ByteRangeSpec, ContentRangeSpec, EntityTag};
 use reqwest::header::Range::Bytes;
 use std::io::Read;
 use std::ops::Range;
+use std::time::SystemTime;
 
 type Body = Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send>;
 
@@ -34,8 +37,8 @@ static BODY: &'static [u8] =
       01234567890123456789012345678901234567890123456789012345678901234567890123456789";
 
 struct FakeEntity {
-    etag: Option<hyper::header::EntityTag>,
-    last_modified: hyper::header::HttpDate,
+    etag: Option<HeaderValue>,
+    last_modified: SystemTime,
 }
 
 impl http_serve::Entity for &'static FakeEntity {
@@ -62,10 +65,10 @@ impl http_serve::Entity for &'static FakeEntity {
                 .unwrap(),
         );
     }
-    fn etag(&self) -> Option<hyper::header::EntityTag> {
+    fn etag(&self) -> Option<HeaderValue> {
         self.etag.clone()
     }
-    fn last_modified(&self) -> Option<hyper::header::HttpDate> {
+    fn last_modified(&self) -> Option<SystemTime> {
         Some(self.last_modified)
     }
 }
@@ -111,19 +114,19 @@ const SOME_DATE_STR: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
 const LATER_DATE_STR: &str = "Sun, 06 Nov 1994 09:49:37 GMT";
 
 lazy_static! {
-    static ref SOME_DATE: reqwest::header::HttpDate = { SOME_DATE_STR.parse().unwrap() };
-    static ref LATER_DATE: reqwest::header::HttpDate = { LATER_DATE_STR.parse().unwrap() };
+    static ref SOME_DATE: SystemTime = httpdate::parse_http_date(SOME_DATE_STR).unwrap();
+    static ref LATER_DATE: SystemTime = httpdate::parse_http_date(LATER_DATE_STR).unwrap();
     static ref ENTITY_NO_ETAG: FakeEntity = FakeEntity {
         etag: None,
-        last_modified: SOME_DATE_STR.parse().unwrap(),
+        last_modified: *SOME_DATE,
     };
     static ref ENTITY_STRONG_ETAG: FakeEntity = FakeEntity {
-        etag: Some(hyper::header::EntityTag::strong("foo".to_owned())),
-        last_modified: SOME_DATE_STR.parse().unwrap(),
+        etag: Some(HeaderValue::from_static("\"foo\"")),
+        last_modified: *SOME_DATE,
     };
     static ref ENTITY_WEAK_ETAG: FakeEntity = FakeEntity {
-        etag: Some(hyper::header::EntityTag::weak("foo".to_owned())),
-        last_modified: SOME_DATE_STR.parse().unwrap(),
+        etag: Some(HeaderValue::from_static("W/\"foo\"")),
+        last_modified: *SOME_DATE,
     };
     static ref SERVER: String = { new_server() };
     static ref MIME: reqwest::mime::Mime = { "application/octet-stream".parse().unwrap() };
@@ -207,7 +210,7 @@ fn serve_without_etag() {
     // Unmodified since supplied date.
     let mut resp = client
         .get(&url)
-        .header(header::IfModifiedSince(*SOME_DATE))
+        .header(header::IfModifiedSince((*SOME_DATE).into()))
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::NotModified, resp.status());
@@ -310,7 +313,7 @@ fn serve_without_etag() {
     let mut resp = client
         .get(&url)
         .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
-        .header(header::IfRange::Date(*SOME_DATE))
+        .header(header::IfRange::Date((*SOME_DATE).into()))
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, resp.status());
@@ -326,7 +329,7 @@ fn serve_without_etag() {
     let mut resp = client
         .get(&url)
         .header(Bytes(vec![ByteRangeSpec::FromTo(1, 3)]))
-        .header(header::IfRange::Date(*LATER_DATE))
+        .header(header::IfRange::Date((*LATER_DATE).into()))
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::Ok, resp.status());

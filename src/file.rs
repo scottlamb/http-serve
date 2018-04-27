@@ -8,8 +8,7 @@
 
 use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
-use http;
-use hyper::header;
+use http::header::{HeaderMap, HeaderValue};
 use std::io;
 use std::ops::Range;
 use std::os::unix::fs::{FileExt, MetadataExt};
@@ -35,7 +34,7 @@ struct ChunkedReadFileInner {
     mtime: SystemTime,
     f: ::std::fs::File,
     pool: Option<CpuPool>,
-    headers: http::header::HeaderMap,
+    headers: HeaderMap,
 }
 
 impl<B, C> ChunkedReadFile<B, C> {
@@ -48,7 +47,7 @@ impl<B, C> ChunkedReadFile<B, C> {
     pub fn new(
         file: ::std::fs::File,
         pool: Option<CpuPool>,
-        headers: http::header::HeaderMap,
+        headers: HeaderMap,
     ) -> Result<Self, io::Error> {
         let m = file.metadata()?;
         Ok(ChunkedReadFile {
@@ -114,7 +113,7 @@ where
         stream.into()
     }
 
-    fn add_headers(&self, h: &mut http::header::HeaderMap) {
+    fn add_headers(&self, h: &mut HeaderMap) {
         h.extend(
             self.inner
                 .headers
@@ -123,24 +122,26 @@ where
         );
     }
 
-    fn etag(&self) -> Option<header::EntityTag> {
+    fn etag(&self) -> Option<HeaderValue> {
         // This etag format is similar to Apache's. The etag should change if the file is modified
         // or replaced. The length is probably redundant but doesn't harm anything.
         let dur = self.inner
             .mtime
             .duration_since(time::UNIX_EPOCH)
             .expect("modification time must be after epoch");
-        Some(header::EntityTag::strong(format!(
-            "{:x}:{:x}:{:x}:{:x}",
-            self.inner.inode,
-            self.inner.len,
-            dur.as_secs(),
-            dur.subsec_nanos()
-        )))
+        Some(
+            HeaderValue::from_str(&format!(
+                "\"{:x}:{:x}:{:x}:{:x}\"",
+                self.inner.inode,
+                self.inner.len,
+                dur.as_secs(),
+                dur.subsec_nanos()
+            )).unwrap(),
+        )
     }
 
-    fn last_modified(&self) -> Option<header::HttpDate> {
-        Some(self.inner.mtime.into())
+    fn last_modified(&self) -> Option<SystemTime> {
+        Some(self.inner.mtime)
     }
 }
 
@@ -151,7 +152,7 @@ mod tests {
     use futures::{Future, Stream};
     use futures_cpupool::CpuPool;
     use super::Entity;
-    use http;
+    use http::header::HeaderMap;
     use hyper::Error;
     use self::tempdir::TempDir;
     use std::io::Write;
@@ -169,7 +170,7 @@ mod tests {
         let crf = ChunkedReadFile::<Body, _>::new(
             File::open(&p).unwrap(),
             pool.clone(),
-            http::header::HeaderMap::new(),
+            HeaderMap::new(),
         ).unwrap();
         assert_eq!(4, crf.len());
         let etag1 = crf.etag();
@@ -180,11 +181,8 @@ mod tests {
 
         // A ChunkedReadFile constructed from a modified file should have a different etag.
         f.write_all(b"jkl;").unwrap();
-        let crf = ChunkedReadFile::<Body, _>::new(
-            File::open(&p).unwrap(),
-            pool,
-            http::header::HeaderMap::new(),
-        ).unwrap();
+        let crf = ChunkedReadFile::<Body, _>::new(File::open(&p).unwrap(), pool, HeaderMap::new())
+            .unwrap();
         assert_eq!(8, crf.len());
         let etag2 = crf.etag();
         assert_ne!(etag1, etag2);
