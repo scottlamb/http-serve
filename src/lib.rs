@@ -83,6 +83,7 @@ use std::ops::Range;
 mod chunker;
 mod file;
 mod gzip;
+mod range;
 mod serving;
 
 pub use file::ChunkedReadFile;

@@ -13,65 +13,12 @@ use http;
 use hyper::{self, Error, Method};
 use hyper::header;
 use hyper::server::{Request, Response};
+use range;
 use smallvec::SmallVec;
 use super::Entity;
-use std::cmp;
 use std::io::Write;
 use std::ops::Range;
 use std::time::SystemTime;
-
-/// Represents a `Range:` header which has been parsed and resolved to a particular entity length.
-#[derive(Debug, Eq, PartialEq)]
-enum ResolvedRanges {
-    /// No `Range:` header was supplied.
-    None,
-
-    /// A `Range:` header was supplied, but none of the ranges were possible to satisfy with the
-    /// given entity length.
-    NotSatisfiable,
-
-    /// A `Range:` header was supplied with at least one satisfiable range, included here.
-    /// Non-satisfiable ranges have been dropped. Ranges are converted from the HTTP closed
-    /// interval style to the the std::ops::Range half-open interval style (start inclusive, end
-    /// exclusive).
-    Satisfiable(SmallVec<[Range<u64>; 1]>),
-}
-
-/// Parses the byte-range-set in the range header as described in [RFC 7233 section
-/// 2.1](https://tools.ietf.org/html/rfc7233#section-2.1).
-fn parse_range_header(range: Option<&header::Range>, len: u64) -> ResolvedRanges {
-    if let Some(&header::Range::Bytes(ref byte_ranges)) = range {
-        let mut ranges: SmallVec<[Range<u64>; 1]> = SmallVec::new();
-        for range in byte_ranges {
-            match *range {
-                header::ByteRangeSpec::FromTo(range_from, range_to) => {
-                    let end = cmp::min(range_to + 1, len);
-                    if range_from >= end {
-                        continue; // this range is not satisfiable; skip.
-                    }
-                    ranges.push(range_from..end);
-                }
-                header::ByteRangeSpec::AllFrom(range_from) => {
-                    if range_from >= len {
-                        continue; // this range is not satisfiable; skip.
-                    }
-                    ranges.push(range_from..len);
-                }
-                header::ByteRangeSpec::Last(last) => {
-                    if last >= len {
-                        continue; // this range is not satisfiable; skip.
-                    }
-                    ranges.push((len - last)..len);
-;                }
-            }
-        }
-        if !ranges.is_empty() {
-            return ResolvedRanges::Satisfiable(ranges);
-        }
-        return ResolvedRanges::NotSatisfiable;
-    }
-    ResolvedRanges::None
-}
 
 /// Returns true if `req` doesn't have an `If-None-Match` header matching `req`.
 fn none_match(etag: &Option<header::EntityTag>, req: &Request) -> bool {
@@ -210,9 +157,9 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
     }
 
     let len = e.len();
-    let (range, include_entity_headers) = match parse_range_header(range_hdr, len) {
-        ResolvedRanges::None => (0..len, true),
-        ResolvedRanges::Satisfiable(rs) => {
+    let (range, include_entity_headers) = match range::parse(range_hdr, len) {
+        range::ResolvedRanges::None => (0..len, true),
+        range::ResolvedRanges::Satisfiable(rs) => {
             if rs.len() == 1 {
                 res.headers_mut()
                     .set(header::ContentRange(header::ContentRangeSpec::Bytes {
@@ -233,7 +180,7 @@ pub fn serve<E: Entity>(e: E, req: &Request) -> Response<E::Body> {
                 (0..len, true)
             }
         }
-        ResolvedRanges::NotSatisfiable => {
+        range::ResolvedRanges::NotSatisfiable => {
             res.headers_mut()
                 .set(header::ContentRange(header::ContentRangeSpec::Bytes {
                     range: None,
@@ -344,144 +291,4 @@ fn send_multipart<E: Entity>(
     let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> = Box::new(bodies.flatten());
     res.set_body(body);
     res
-}
-
-#[cfg(test)]
-mod tests {
-    use hyper::header::ByteRangeSpec;
-    use hyper::header::Range::Bytes;
-    use smallvec::SmallVec;
-    use super::{parse_range_header, ResolvedRanges};
-
-    /// Tests the specific examples enumerated in [RFC 2616 section
-    /// 14.35.1](https://tools.ietf.org/html/rfc2616#section-14.35.1).
-    #[test]
-    fn test_resolve_ranges_rfc() {
-        let mut v = SmallVec::new();
-
-        v.push(0..500);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 499)])), 10000)
-        );
-
-        v.clear();
-        v.push(500..1000);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(500, 999)])), 10000)
-        );
-
-        v.clear();
-        v.push(9500..10000);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::Last(500)])), 10000)
-        );
-
-        v.clear();
-        v.push(9500..10000);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(9500)])), 10000)
-        );
-
-        v.clear();
-        v.push(0..1);
-        v.push(9999..10000);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(
-                Some(&Bytes(vec![
-                    ByteRangeSpec::FromTo(0, 0),
-                    ByteRangeSpec::Last(1),
-                ])),
-                10000
-            )
-        );
-
-        // Non-canonical ranges. Possibly the point of these is that the adjacent and overlapping
-        // ranges are supposed to be coalesced into one? I'm not going to do that for now.
-
-        v.clear();
-        v.push(500..601);
-        v.push(601..1000);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(
-                Some(&Bytes(vec![
-                    ByteRangeSpec::FromTo(500, 600),
-                    ByteRangeSpec::FromTo(601, 999),
-                ])),
-                10000
-            )
-        );
-
-        v.clear();
-        v.push(500..701);
-        v.push(601..1000);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(
-                Some(&Bytes(vec![
-                    ByteRangeSpec::FromTo(500, 700),
-                    ByteRangeSpec::FromTo(601, 999),
-                ])),
-                10000
-            )
-        );
-    }
-
-    #[test]
-    fn test_resolve_ranges_satisfiability() {
-        assert_eq!(
-            ResolvedRanges::NotSatisfiable,
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(10000)])), 10000)
-        );
-
-        let mut v = SmallVec::new();
-        v.push(0..500);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(
-                Some(&Bytes(vec![
-                    ByteRangeSpec::FromTo(0, 499),
-                    ByteRangeSpec::AllFrom(10000),
-                ])),
-                10000
-            )
-        );
-
-        assert_eq!(
-            ResolvedRanges::NotSatisfiable,
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::Last(1)])), 0)
-        );
-        assert_eq!(
-            ResolvedRanges::NotSatisfiable,
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0)])), 0)
-        );
-        assert_eq!(
-            ResolvedRanges::NotSatisfiable,
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::AllFrom(0)])), 0)
-        );
-
-        v.clear();
-        v.push(0..1);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0)])), 1)
-        );
-
-        v.clear();
-        v.push(0..500);
-        assert_eq!(
-            ResolvedRanges::Satisfiable(v.clone()),
-            parse_range_header(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 10000)])), 500)
-        );
-    }
-
-    #[test]
-    fn test_resolve_ranges_absent_or_invalid() {
-        assert_eq!(ResolvedRanges::None, parse_range_header(None, 10000));
-    }
 }
