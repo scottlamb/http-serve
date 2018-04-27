@@ -122,7 +122,7 @@ lazy_static! {
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
     static ref ENTITY_WEAK_ETAG: FakeEntity = FakeEntity {
-        etag: Some(hyper::header::EntityTag::strong("foo".to_owned())),
+        etag: Some(hyper::header::EntityTag::weak("foo".to_owned())),
         last_modified: SOME_DATE_STR.parse().unwrap(),
     };
     static ref SERVER: String = { new_server() };
