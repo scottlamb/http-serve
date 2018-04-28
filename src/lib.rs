@@ -65,10 +65,12 @@
 //! `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send + 'static>` or something
 //! that can be constructed from that type.
 
+extern crate bytes;
 extern crate flate2;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate http;
+extern crate httpdate;
 extern crate hyper;
 extern crate mime;
 extern crate smallvec;
@@ -81,7 +83,23 @@ use hyper::Error;
 use std::ops::Range;
 use std::time::SystemTime;
 
+/// Returns a HeaderValue for the given formatted data.
+/// Caller must make two guarantees:
+///    * The data fits within `max_len`.
+///    * The data are ASCII.
+macro_rules! fmt_ascii_val {
+    ($max_len:expr, $fmt:expr, $($arg:tt)+) => {{
+        let mut buf = ::bytes::BytesMut::with_capacity($max_len);
+        use std::fmt::Write;
+        write!(buf, $fmt, $($arg)*).expect("fmt_val fits within provided max len");
+        unsafe {
+            ::http::header::HeaderValue::from_shared_unchecked(buf.freeze())
+        }
+    }}
+}
+
 mod chunker;
+mod etag;
 mod file;
 mod gzip;
 mod range;

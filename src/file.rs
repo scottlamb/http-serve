@@ -129,15 +129,20 @@ where
             .mtime
             .duration_since(time::UNIX_EPOCH)
             .expect("modification time must be after epoch");
-        Some(
-            HeaderValue::from_str(&format!(
-                "\"{:x}:{:x}:{:x}:{:x}\"",
-                self.inner.inode,
-                self.inner.len,
-                dur.as_secs(),
-                dur.subsec_nanos()
-            )).unwrap(),
-        )
+
+        // Rust doesn't seem to understand these lengths are used in the macro invocation.
+        #[allow(dead_code)]
+        static HEX_U64_LEN: usize = 16;
+        #[allow(dead_code)]
+        static HEX_U32_LEN: usize = 16;
+        Some(fmt_ascii_val!(
+            HEX_U64_LEN * 3 + HEX_U64_LEN + 5,
+            "\"{:x}:{:x}:{:x}:{:x}\"",
+            self.inner.inode,
+            self.inner.len,
+            dur.as_secs(),
+            dur.subsec_nanos()
+        ))
     }
 
     fn last_modified(&self) -> Option<SystemTime> {

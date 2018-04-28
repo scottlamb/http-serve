@@ -22,6 +22,7 @@ extern crate reqwest;
 
 use futures::Stream;
 use futures::stream;
+use http::{Request, Response};
 use http::header::HeaderValue;
 use reqwest::header::{self, ByteRangeSpec, ContentRangeSpec, EntityTag};
 use reqwest::header::Range::Bytes;
@@ -76,12 +77,12 @@ impl http_serve::Entity for &'static FakeEntity {
 struct MyService;
 
 impl hyper::server::Service for MyService {
-    type Request = hyper::server::Request;
-    type Response = hyper::server::Response<Body>;
+    type Request = Request<hyper::Body>;
+    type Response = Response<Body>;
     type Error = hyper::Error;
     type Future = ::futures::future::FutureResult<Self::Response, hyper::Error>;
 
-    fn call(&self, req: hyper::server::Request) -> Self::Future {
+    fn call(&self, req: Self::Request) -> Self::Future {
         let entity: &'static FakeEntity = match req.uri().path() {
             "/none" => &*ENTITY_NO_ETAG,
             "/strong" => &*ENTITY_STRONG_ETAG,
@@ -97,7 +98,7 @@ fn new_server() -> String {
     ::std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
         let server = hyper::server::Http::new()
-            .bind(&addr, || {
+            .bind_compat(&addr, || {
                 info!("creating a service");
                 Ok(MyService)
             })

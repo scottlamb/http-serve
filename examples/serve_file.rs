@@ -27,9 +27,9 @@ extern crate hyper;
 extern crate leak;
 extern crate mime;
 
+use http::{Request, Response};
 use http_serve::ChunkedReadFile;
 use hyper::Error;
-use hyper::server::{Request, Response};
 use leak::Leak;
 use futures::Future;
 use futures::stream::Stream;
@@ -43,12 +43,12 @@ struct Context {
 struct MyService(&'static Context);
 
 impl hyper::server::Service for MyService {
-    type Request = Request;
+    type Request = Request<hyper::Body>;
     type Response = Response<Box<Stream<Item = Vec<u8>, Error = Error> + Send>>;
     type Error = Error;
     type Future = Box<Future<Item = Self::Response, Error = Error>>;
 
-    fn call(&self, req: Request) -> Self::Future {
+    fn call(&self, req: Self::Request) -> Self::Future {
         let ctx = self.0;
         Box::new(ctx.pool.spawn_fn(move || {
             let f = ::std::fs::File::open(&ctx.path)?;
@@ -76,7 +76,7 @@ fn main() {
     env_logger::init().unwrap();
     let addr = "127.0.0.1:1337".parse().unwrap();
     let server = hyper::server::Http::new()
-        .bind(&addr, move || Ok(MyService(ctx)))
+        .bind_compat(&addr, move || Ok(MyService(ctx)))
         .unwrap();
     println!(
         "Serving {} on http://{} with 1 thread.",

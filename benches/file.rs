@@ -21,7 +21,7 @@ extern crate tempdir;
 extern crate test;
 
 use hyper::Error;
-use hyper::server::{Request, Response};
+use http::{Request, Response};
 use futures::Future;
 use futures::stream::Stream;
 use futures_cpupool::CpuPool;
@@ -34,12 +34,12 @@ use tempdir::TempDir;
 struct MyService;
 
 impl hyper::server::Service for MyService {
-    type Request = Request;
+    type Request = Request<hyper::Body>;
     type Response = Response<Box<Stream<Item = Vec<u8>, Error = Error> + Send>>;
     type Error = Error;
     type Future = Box<Future<Item = Self::Response, Error = Error>>;
 
-    fn call(&self, req: Request) -> Self::Future {
+    fn call(&self, req: Self::Request) -> Self::Future {
         let construction = move || {
             let f = File::open(&*PATH.lock().unwrap())?;
             let headers = http::header::HeaderMap::new();
@@ -56,7 +56,7 @@ fn new_server() -> String {
     ::std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
         let server = hyper::server::Http::new()
-            .bind(&addr, || Ok(MyService))
+            .bind_compat(&addr, || Ok(MyService))
             .unwrap();
         let addr = server.local_addr().unwrap();
         tx.send(addr).unwrap();
