@@ -6,6 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use Entity;
+use bytes::Buf;
 use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
 use http::header::{HeaderMap, HeaderValue};
@@ -14,7 +16,6 @@ use std::ops::Range;
 use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Arc;
 use std::time::{self, SystemTime};
-use Entity;
 
 // This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
 // a tradeoff between memory usage and thread handoffs.
@@ -23,9 +24,12 @@ static CHUNK_SIZE: u64 = 65_536;
 /// A HTTP entity created from a `std::fs::File` which reads the file
 /// chunk-by-chunk on a `CpuPool`.
 #[derive(Clone)]
-pub struct ChunkedReadFile<B, C> {
+pub struct ChunkedReadFile<
+    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    E: 'static + Send + Into<Box<::std::error::Error + Send + Sync>> + From<Box<::std::io::Error>>,
+> {
     inner: Arc<ChunkedReadFileInner>,
-    phantom: ::std::marker::PhantomData<(B, C)>,
+    phantom: ::std::marker::PhantomData<(D, E)>,
 }
 
 struct ChunkedReadFileInner {
@@ -37,7 +41,11 @@ struct ChunkedReadFileInner {
     headers: HeaderMap,
 }
 
-impl<B, C> ChunkedReadFile<B, C> {
+impl<D, E> ChunkedReadFile<D, E>
+where
+    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    E: 'static + Send + Into<Box<::std::error::Error + Send + Sync>> + From<Box<::std::io::Error>>,
+{
     /// Creates a new ChunkedReadFile.
     ///
     /// `read(2)` calls will be performed on the supplied `pool` so that they don't block the
@@ -64,22 +72,22 @@ impl<B, C> ChunkedReadFile<B, C> {
     }
 }
 
-impl<B, C> Entity for ChunkedReadFile<B, C>
+impl<D, E> Entity for ChunkedReadFile<D, E>
 where
-    B: 'static
-        + Send
-        + Stream<Item = C, Error = ::hyper::Error>
-        + From<Box<Stream<Item = C, Error = ::hyper::Error> + Send>>,
-    C: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]>,
+    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    E: 'static + Send + Into<Box<::std::error::Error + Send + Sync>> + From<Box<::std::io::Error>>,
 {
-    type Chunk = C;
-    type Body = B;
+    type Data = D;
+    type Error = E;
 
     fn len(&self) -> u64 {
         self.inner.len
     }
 
-    fn get_range(&self, range: Range<u64>) -> B {
+    fn get_range(
+        &self,
+        range: Range<u64>,
+    ) -> Box<Stream<Item = Self::Data, Error = Self::Error> + Send> {
         let stream =
             ::futures::stream::unfold((range, Arc::clone(&self.inner)), move |(left, inner)| {
                 if left.start == left.end {
@@ -89,7 +97,7 @@ where
                 let mut chunk = Vec::with_capacity(chunk_size);
                 unsafe { chunk.set_len(chunk_size) };
                 let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
-                    Err(e) => return Some(Err(e.into())),
+                    Err(e) => return Some(Err(Box::new(e).into())),
                     Ok(b) => b,
                 };
                 chunk.truncate(bytes_read);
@@ -99,7 +107,7 @@ where
                 )))
             });
 
-        let stream: Box<Stream<Item = C, Error = ::hyper::Error> + Send> = match self.inner.pool {
+        let stream: Box<Stream<Item = D, Error = E> + Send> = match self.inner.pool {
             Some(ref p) => {
                 let (snd, rcv) = ::futures::sync::mpsc::channel(0);
                 p.spawn(snd.send_all(stream.then(Ok))).forget();
@@ -154,17 +162,17 @@ where
 mod tests {
     extern crate tempdir;
 
+    use self::tempdir::TempDir;
+    use super::ChunkedReadFile;
+    use super::Entity;
     use futures::{Future, Stream};
     use futures_cpupool::CpuPool;
-    use super::Entity;
     use http::header::HeaderMap;
-    use hyper::Error;
-    use self::tempdir::TempDir;
-    use std::io::Write;
+    use hyper::Chunk;
     use std::fs::File;
-    use super::ChunkedReadFile;
+    use std::io::Write;
 
-    type Body = Box<Stream<Item = Vec<u8>, Error = Error> + Send>;
+    type CRF = ChunkedReadFile<Chunk, Box<::std::error::Error + Sync + Send>>;
 
     fn basic_tests(pool: Option<CpuPool>) {
         let tmp = TempDir::new("http-file").unwrap();
@@ -172,22 +180,23 @@ mod tests {
         let mut f = File::create(&p).unwrap();
         f.write_all(b"asdf").unwrap();
 
-        let crf = ChunkedReadFile::<Body, _>::new(
-            File::open(&p).unwrap(),
-            pool.clone(),
-            HeaderMap::new(),
-        ).unwrap();
+        let crf = CRF::new(File::open(&p).unwrap(), pool.clone(), HeaderMap::new()).unwrap();
         assert_eq!(4, crf.len());
         let etag1 = crf.etag();
 
         // Test returning part/all of the stream.
-        assert_eq!(&crf.get_range(0..4).concat2().wait().unwrap(), b"asdf");
-        assert_eq!(&crf.get_range(1..3).concat2().wait().unwrap(), b"sd");
+        assert_eq!(
+            &crf.get_range(0..4).concat2().wait().unwrap().as_ref(),
+            b"asdf"
+        );
+        assert_eq!(
+            &crf.get_range(1..3).concat2().wait().unwrap().as_ref(),
+            b"sd"
+        );
 
         // A ChunkedReadFile constructed from a modified file should have a different etag.
         f.write_all(b"jkl;").unwrap();
-        let crf = ChunkedReadFile::<Body, _>::new(File::open(&p).unwrap(), pool, HeaderMap::new())
-            .unwrap();
+        let crf = CRF::new(File::open(&p).unwrap(), pool, HeaderMap::new()).unwrap();
         assert_eq!(8, crf.len());
         let etag2 = crf.etag();
         assert_ne!(etag1, etag2);

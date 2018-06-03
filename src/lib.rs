@@ -49,7 +49,7 @@
 //! entire body in-memory before returning anything to hyper.
 //!
 //! If you are buffering a response in memory, `serve` requires copying the bytes (when using
-//! `Chunk = Vec<u8>` or similar) or atomic reference-counting (with `Chunk = Arc<Vec<u8>>` or
+//! `Data = Vec<u8>` or similar) or atomic reference-counting (with `Data = Arc<Vec<u8>>` or
 //! similar). `streaming_body` doesn't need to keep its own copy for potential future use; it may
 //! be cheaper because it can simply hand ownership of the existing `Vec<u8>`s to hyper.
 //!
@@ -77,9 +77,9 @@ extern crate smallvec;
 extern crate time;
 extern crate unicase;
 
+use bytes::Buf;
 use futures::Stream;
 use http::header::{self, HeaderMap, HeaderValue};
-use hyper::Error;
 use std::ops::Range;
 use std::time::SystemTime;
 
@@ -112,18 +112,12 @@ pub use serving::serve;
 /// A reusable, read-only, byte-rangeable HTTP entity for GET and HEAD serving.
 /// Must return exactly the same data on every call.
 pub trait Entity: 'static + Send {
-    /// The type of a chunk.
-    ///
-    /// Commonly `::hyper::Chunk` or `Vec<u8>` but may be something more exotic such as
-    /// `::reffers::ARefs<'static, [u8]>` to minimize copying.
-    type Chunk: 'static + Send + AsRef<[u8]> + From<Vec<u8>> + From<&'static [u8]>;
+    type Error: Send;
 
-    /// The type of the body stream. Commonly
-    /// `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send + 'static>`.
-    type Body: 'static
-        + Send
-        + Stream<Item = Self::Chunk, Error = Error>
-        + From<Box<Stream<Item = Self::Chunk, Error = Error> + Send>>;
+    /// The type of a data chunk.
+    ///
+    /// Commonly `::hyper::Chunk` but may be something more exotic.
+    type Data: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>;
 
     /// Returns the length of the entity's body in bytes.
     fn len(&self) -> u64;
@@ -134,7 +128,10 @@ pub trait Entity: 'static + Send {
     }
 
     /// Gets the body bytes indicated by `range`.
-    fn get_range(&self, range: Range<u64>) -> Self::Body;
+    fn get_range(
+        &self,
+        range: Range<u64>,
+    ) -> Box<Stream<Item = Self::Data, Error = Self::Error> + Send>;
 
     /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
     /// In particular, these headers are the "other representation header fields" described by [RFC
@@ -259,14 +256,14 @@ impl StreamingBodyBuilder {
         }
     }
 
-    pub fn build<Chunk: From<Vec<u8>> + Send + 'static>(
-        self,
-    ) -> (
-        http::Response<Box<Stream<Item = Chunk, Error = hyper::Error> + Send + 'static>>,
-        Option<BodyWriter<Chunk>>,
-    ) {
-        let (w, body) = chunker::BodyWriter::with_chunk_size(self.chunk_size);
-        let mut resp = http::Response::new(body);
+    pub fn build<P, D, E>(self) -> (http::Response<P>, Option<BodyWriter<D, E>>)
+    where
+        D: From<Vec<u8>> + Send,
+        E: Send,
+        P: From<Box<Stream<Item = D, Error = E> + Send>>,
+    {
+        let (w, stream) = chunker::BodyWriter::with_chunk_size(self.chunk_size);
+        let mut resp = http::Response::new(stream.into());
         resp.headers_mut()
             .append(header::VARY, HeaderValue::from_static("accept-encoding"));
 
@@ -290,8 +287,8 @@ impl StreamingBodyBuilder {
 
 #[cfg(test)]
 mod tests {
-    use http::{self, header};
     use http::header::HeaderValue;
+    use http::{self, header};
 
     fn ae_hdrs(value: &'static str) -> http::HeaderMap {
         let mut h = http::HeaderMap::new();

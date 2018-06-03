@@ -19,35 +19,25 @@ extern crate mime;
 extern crate reqwest;
 extern crate tempdir;
 extern crate test;
+extern crate tokio;
 
-use hyper::Error;
-use http::{Request, Response};
 use futures::Future;
-use futures::stream::Stream;
-use futures_cpupool::CpuPool;
-use std::io::{Read, Write};
+use futures_cpupool::{CpuFuture, CpuPool};
+use http::{Request, Response};
+use hyper::Body;
 use std::ffi::OsString;
 use std::fs::File;
+use std::io::{Read, Write};
 use std::sync::Mutex;
 use tempdir::TempDir;
 
-struct MyService;
-
-impl hyper::server::Service for MyService {
-    type Request = Request<hyper::Body>;
-    type Response = Response<Box<Stream<Item = Vec<u8>, Error = Error> + Send>>;
-    type Error = Error;
-    type Future = Box<Future<Item = Self::Response, Error = Error>>;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
-        let construction = move || {
-            let f = File::open(&*PATH.lock().unwrap())?;
-            let headers = http::header::HeaderMap::new();
-            let f = http_serve::ChunkedReadFile::new(f, Some(POOL.clone()), headers)?;
-            Ok(http_serve::serve(f, &req))
-        };
-        Box::new(POOL.spawn_fn(construction))
-    }
+fn serve(req: Request<Body>) -> CpuFuture<Response<Body>, ::std::io::Error> {
+    POOL.spawn_fn(move || {
+        let f = File::open(&*PATH.lock().unwrap())?;
+        let headers = http::header::HeaderMap::new();
+        let f = http_serve::ChunkedReadFile::new(f, Some(POOL.clone()), headers)?;
+        Ok(http_serve::serve(f, &req))
+    })
 }
 
 /// Returns the hostport of a newly created, never-destructed server.
@@ -55,12 +45,10 @@ fn new_server() -> String {
     let (tx, rx) = ::std::sync::mpsc::channel();
     ::std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
-        let server = hyper::server::Http::new()
-            .bind_compat(&addr, || Ok(MyService))
-            .unwrap();
-        let addr = server.local_addr().unwrap();
+        let server = hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn(serve));
+        let addr = server.local_addr();
         tx.send(addr).unwrap();
-        server.run().unwrap()
+        tokio::run(server.map_err(|e| panic!(e)))
     });
     let addr = rx.recv().unwrap();
     format!("http://{}:{}", addr.ip(), addr.port())

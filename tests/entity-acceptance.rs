@@ -6,6 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+extern crate env_logger;
 extern crate futures;
 extern crate http;
 extern crate http_serve;
@@ -13,24 +14,20 @@ extern crate httpdate;
 extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
-#[macro_use]
-extern crate log;
-extern crate smallvec;
-
-extern crate env_logger;
 extern crate reqwest;
+extern crate smallvec;
+extern crate tokio;
 
-use futures::Stream;
 use futures::stream;
-use http::{Request, Response};
+use futures::{Future, Stream};
 use http::header::HeaderValue;
-use reqwest::header::{self, ByteRangeSpec, ContentRangeSpec, EntityTag};
+use http::{Request, Response};
+use hyper::body::Body;
 use reqwest::header::Range::Bytes;
+use reqwest::header::{self, ByteRangeSpec, ContentRangeSpec, EntityTag};
 use std::io::Read;
 use std::ops::Range;
 use std::time::SystemTime;
-
-type Body = Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send>;
 
 static BODY: &'static [u8] =
     b"01234567890123456789012345678901234567890123456789012345678901234567890123456789\
@@ -43,8 +40,8 @@ struct FakeEntity {
 }
 
 impl http_serve::Entity for &'static FakeEntity {
-    type Chunk = Vec<u8>;
-    type Body = Body;
+    type Data = hyper::Chunk;
+    type Error = Box<::std::error::Error + Send + Sync>;
 
     fn len(&self) -> u64 {
         BODY.len() as u64
@@ -52,7 +49,7 @@ impl http_serve::Entity for &'static FakeEntity {
     fn get_range(
         &self,
         range: Range<u64>,
-    ) -> Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send> {
+    ) -> Box<Stream<Item = Self::Data, Error = Self::Error> + Send> {
         Box::new(stream::once(Ok(BODY
             [range.start as usize..range.end as usize]
             .into())))
@@ -60,10 +57,7 @@ impl http_serve::Entity for &'static FakeEntity {
     fn add_headers(&self, headers: &mut http::header::HeaderMap) {
         headers.insert(
             http::header::CONTENT_TYPE,
-            hyper::mime::APPLICATION_OCTET_STREAM
-                .as_ref()
-                .parse()
-                .unwrap(),
+            HeaderValue::from_static("application/octet-stream"),
         );
     }
     fn etag(&self) -> Option<HeaderValue> {
@@ -74,38 +68,24 @@ impl http_serve::Entity for &'static FakeEntity {
     }
 }
 
-struct MyService;
-
-impl hyper::server::Service for MyService {
-    type Request = Request<hyper::Body>;
-    type Response = Response<Body>;
-    type Error = hyper::Error;
-    type Future = ::futures::future::FutureResult<Self::Response, hyper::Error>;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
-        let entity: &'static FakeEntity = match req.uri().path() {
-            "/none" => &*ENTITY_NO_ETAG,
-            "/strong" => &*ENTITY_STRONG_ETAG,
-            "/weak" => &*ENTITY_WEAK_ETAG,
-            p => panic!("unexpected path {}", p),
-        };
-        futures::future::ok(http_serve::serve(entity, &req))
-    }
+fn serve(req: Request<Body>) -> Response<Body> {
+    let entity: &'static FakeEntity = match req.uri().path() {
+        "/none" => &*ENTITY_NO_ETAG,
+        "/strong" => &*ENTITY_STRONG_ETAG,
+        "/weak" => &*ENTITY_WEAK_ETAG,
+        p => panic!("unexpected path {}", p),
+    };
+    http_serve::serve(entity, &req)
 }
 
 fn new_server() -> String {
     let (tx, rx) = ::std::sync::mpsc::channel();
     ::std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
-        let server = hyper::server::Http::new()
-            .bind_compat(&addr, || {
-                info!("creating a service");
-                Ok(MyService)
-            })
-            .unwrap();
-        let addr = server.local_addr().unwrap();
-        tx.send(addr).unwrap();
-        server.run().unwrap()
+        let server =
+            hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn_ok(serve));
+        tx.send(server.local_addr()).unwrap();
+        tokio::run(server.map_err(|e| eprintln!("server error: {}", e)))
     });
     let addr = rx.recv().unwrap();
     format!("http://{}:{}", addr.ip(), addr.port())

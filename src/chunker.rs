@@ -6,11 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use futures::sync::mpsc;
 use futures::Stream;
-use hyper;
-use std::mem;
+use futures::sync::mpsc;
 use std::io::{self, Write};
+use std::mem;
 
 /// A `std::io::Write` implementation that makes a chunked hyper response body stream.
 /// Raw in the sense that it doesn't apply content encoding and isn't particularly user-friendly:
@@ -24,23 +23,23 @@ use std::io::{self, Write};
 /// The stream is infinitely buffered; calls to `write` and `flush` never block. `flush` thus is a
 /// hint that data should be sent to the client as soon as possible, but this shouldn't be expected
 /// to happen before it returns.
-pub(crate) struct BodyWriter<Chunk>
+pub(crate) struct BodyWriter<D, E>
 where
-    Chunk: From<Vec<u8>> + Send + 'static,
+    D: From<Vec<u8>> + Send + 'static,
+    E: Send + 'static,
 {
-    sender: mpsc::UnboundedSender<Result<Chunk, hyper::Error>>,
+    sender: mpsc::UnboundedSender<Result<D, E>>,
 
     /// The next buffer to use. Invariant: capacity > len.
     buf: Vec<u8>,
 }
 
-impl<Chunk> BodyWriter<Chunk>
+impl<D, E> BodyWriter<D, E>
 where
-    Chunk: From<Vec<u8>> + Send + 'static,
+    D: From<Vec<u8>> + Send + 'static,
+    E: Send + 'static,
 {
-    pub(crate) fn with_chunk_size(
-        cap: usize,
-    ) -> (Self, Box<Stream<Item = Chunk, Error = hyper::Error> + Send>) {
+    pub(crate) fn with_chunk_size(cap: usize) -> (Self, Box<Stream<Item = D, Error = E> + Send>) {
         assert!(cap > 0);
         let (snd, rcv) = mpsc::unbounded();
         let body = Box::new(
@@ -56,12 +55,10 @@ where
         )
     }
 
-    /// Causes the HTTP connection to be dropped abruptly.
-    pub(crate) fn abort(&mut self) {
-        // hyper drops the connection when the stream contains an error. The actual error is not
-        // particularly important. Future versions of hyper are likely to change the way this
-        // works, see <https://github.com/hyperium/hyper/issues/1131>.
-        let _ = self.sender.unbounded_send(Err(hyper::Error::Incomplete));
+    /// Causes the HTTP connection to be dropped abruptly with the given error.
+    pub(crate) fn abort(&mut self, error: E) {
+        // hyper drops the connection when the stream contains an error.
+        let _ = self.sender.unbounded_send(Err(error));
     }
 
     /// Truncates the output buffer (for testing).
@@ -71,9 +68,10 @@ where
     }
 }
 
-impl<Chunk> Write for BodyWriter<Chunk>
+impl<D, E> Write for BodyWriter<D, E>
 where
-    Chunk: From<Vec<u8>> + Send + 'static,
+    D: From<Vec<u8>> + Send + 'static,
+    E: Send + 'static,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let remaining = self.buf.capacity() - self.buf.len();
@@ -106,9 +104,10 @@ where
     }
 }
 
-impl<Chunk> Drop for BodyWriter<Chunk>
+impl<D, E> Drop for BodyWriter<D, E>
 where
-    Chunk: From<Vec<u8>> + Send + 'static,
+    D: From<Vec<u8>> + Send + 'static,
+    E: Send + 'static,
 {
     fn drop(&mut self) {
         let _ = self.flush();
@@ -117,17 +116,17 @@ where
 
 #[cfg(test)]
 mod tests {
-    use futures::{Future, Stream};
     use super::BodyWriter;
+    use futures::{Future, Stream};
     use std::io::Write;
 
-    type Body = Box<Stream<Item = Vec<u8>, Error = ::hyper::Error> + Send>;
+    type BodyStream = Box<Stream<Item = Vec<u8>, Error = ()> + Send>;
 
     // A smaller-than-chunk-size write shouldn't be flushed on write, and there's currently no Drop
     // implementation to do it either.
     #[test]
     fn small_no_flush() {
-        let (mut w, body): (_, Body) = BodyWriter::with_chunk_size(4);
+        let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1").unwrap(), 1);
         w.truncate();
         drop(w);
@@ -137,7 +136,7 @@ mod tests {
     // With a flush, the content should show up.
     #[test]
     fn small_flush() {
-        let (mut w, body): (_, Body) = BodyWriter::with_chunk_size(4);
+        let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1").unwrap(), 1);
         w.flush().unwrap();
         drop(w);
@@ -147,7 +146,7 @@ mod tests {
     // A write of exactly the chunk size should be automatically flushed.
     #[test]
     fn chunk_write() {
-        let (mut w, body): (_, Body) = BodyWriter::with_chunk_size(4);
+        let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1234").unwrap(), 4);
         w.flush().unwrap();
         drop(w);
@@ -157,7 +156,7 @@ mod tests {
     // ...and everything should be set up for the next write as well.
     #[test]
     fn chunk_double_write() {
-        let (mut w, body): (_, Body) = BodyWriter::with_chunk_size(4);
+        let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1234").unwrap(), 4);
         assert_eq!(w.write(b"5678").unwrap(), 4);
         w.flush().unwrap();
@@ -168,7 +167,7 @@ mod tests {
     // A larger-than-chunk-size write should be turned into a chunk-size write.
     #[test]
     fn large_write() {
-        let (mut w, body): (_, Body) = BodyWriter::with_chunk_size(4);
+        let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"123456").unwrap(), 4);
         drop(w);
         assert_eq!(b"1234", &body.concat2().wait().unwrap()[..]);
@@ -177,7 +176,7 @@ mod tests {
     // ...similarly, one that uses all the remaining capacity of the chunk.
     #[test]
     fn small_large_write() {
-        let (mut w, body): (_, Body) = BodyWriter::with_chunk_size(4);
+        let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1").unwrap(), 1);
         assert_eq!(w.write(b"2345").unwrap(), 3);
         drop(w);
@@ -187,10 +186,10 @@ mod tests {
     // Aborting should add an Err element to the stream, ignoring any unflushed bytes.
     #[test]
     fn abort() {
-        let (mut w, body): (_, Body) = BodyWriter::with_chunk_size(4);
+        let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         w.write_all(b"12345").unwrap();
         w.truncate();
-        w.abort();
+        w.abort(());
         drop(w);
         let items = body.then(|r| -> Result<_, ()> { Ok(r) })
             .collect()

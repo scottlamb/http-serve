@@ -7,8 +7,8 @@
 // except according to those terms.
 
 use chunker;
-use std::mem;
 use std::io::{self, Write};
+use std::mem;
 
 /// A `std::io::Write` implementation that makes a chunked hyper response body stream.
 /// Automatically applies `gzip` content encoding if requested by the client.
@@ -26,45 +26,51 @@ use std::io::{self, Write};
 /// On drop, the stream will be "finished" (for gzip, this writes a special footer). There's no way
 /// to know the complete stream was written successfully. It's inherent in the combination of
 /// HTTP / TCP / Unix sockets / hyper anyway that only the client knows this.
-pub struct BodyWriter<Chunk: From<Vec<u8>> + Send + 'static>(Inner<Chunk>);
-
-enum Inner<Chunk>
+pub struct BodyWriter<D, E>(Inner<D, E>)
 where
-    Chunk: From<Vec<u8>> + Send + 'static,
+    D: From<Vec<u8>> + Send + 'static,
+    E: Send + 'static;
+
+enum Inner<D, E>
+where
+    D: From<Vec<u8>> + Send + 'static,
+    E: Send + 'static,
 {
-    Raw(chunker::BodyWriter<Chunk>),
-    Gzipped(::flate2::write::GzEncoder<chunker::BodyWriter<Chunk>>),
+    Raw(chunker::BodyWriter<D, E>),
+    Gzipped(::flate2::write::GzEncoder<chunker::BodyWriter<D, E>>),
 
     /// No more data should be sent. `abort()` or `drop()` has been called, or a previous call
     /// discovered that the receiver has been dropped.
     Dead,
 }
 
-impl<Chunk> BodyWriter<Chunk>
+impl<D, E> BodyWriter<D, E>
 where
-    Chunk: From<Vec<u8>> + Send + 'static,
+    D: From<Vec<u8>> + Send + 'static,
+    E: Send + 'static,
 {
-    pub(crate) fn raw(raw: chunker::BodyWriter<Chunk>) -> Self {
+    pub(crate) fn raw(raw: chunker::BodyWriter<D, E>) -> Self {
         BodyWriter(Inner::Raw(raw))
     }
 
-    pub(crate) fn gzipped(raw: chunker::BodyWriter<Chunk>, level: ::flate2::Compression) -> Self {
+    pub(crate) fn gzipped(raw: chunker::BodyWriter<D, E>, level: ::flate2::Compression) -> Self {
         BodyWriter(Inner::Gzipped(::flate2::GzBuilder::new().write(raw, level)))
     }
 
     /// Causes the HTTP connection to be dropped abruptly.
-    pub fn abort(&mut self) {
+    pub fn abort(&mut self, error: E) {
         match mem::replace(&mut self.0, Inner::Dead) {
             Inner::Dead => (),
-            Inner::Raw(ref mut w) => w.abort(),
-            Inner::Gzipped(ref mut g) => g.get_mut().abort(),
+            Inner::Raw(ref mut w) => w.abort(error),
+            Inner::Gzipped(ref mut g) => g.get_mut().abort(error),
         };
     }
 }
 
-impl<Chunk> Write for BodyWriter<Chunk>
+impl<D, E> Write for BodyWriter<D, E>
 where
-    Chunk: From<Vec<u8>> + Send + 'static,
+    D: From<Vec<u8>> + Send + 'static,
+    E: Send + 'static,
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let r = match self.0 {

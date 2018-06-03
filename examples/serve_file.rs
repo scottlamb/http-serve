@@ -26,37 +26,40 @@ extern crate http_serve;
 extern crate hyper;
 extern crate leak;
 extern crate mime;
+extern crate tokio;
 
+use futures::Future;
+use futures_cpupool::{CpuFuture, CpuPool};
 use http::{Request, Response};
 use http_serve::ChunkedReadFile;
-use hyper::Error;
+use hyper::Body;
 use leak::Leak;
-use futures::Future;
-use futures::stream::Stream;
-use futures_cpupool::CpuPool;
 
 struct Context {
     path: ::std::ffi::OsString,
     pool: CpuPool,
 }
 
-struct MyService(&'static Context);
+fn try_serve(
+    ctx: &'static Context,
+    req: Request<Body>,
+) -> Result<Response<Body>, ::std::io::Error> {
+    let f = ::std::fs::File::open(&ctx.path)?;
+    let headers = http::header::HeaderMap::new();
+    let f = ChunkedReadFile::new(f, Some(ctx.pool.clone()), headers)?;
+    Ok(http_serve::serve(f, &req))
+}
 
-impl hyper::server::Service for MyService {
-    type Request = Request<hyper::Body>;
-    type Response = Response<Box<Stream<Item = Vec<u8>, Error = Error> + Send>>;
-    type Error = Error;
-    type Future = Box<Future<Item = Self::Response, Error = Error>>;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
-        let ctx = self.0;
-        Box::new(ctx.pool.spawn_fn(move || {
-            let f = ::std::fs::File::open(&ctx.path)?;
-            let headers = http::header::HeaderMap::new();
-            let f = ChunkedReadFile::new(f, Some(ctx.pool.clone()), headers)?;
-            Ok(http_serve::serve(f, &req))
-        }))
-    }
+fn serve(ctx: &'static Context, req: Request<Body>) -> CpuFuture<Response<Body>, ::std::io::Error> {
+    ctx.pool.spawn_fn(move || {
+        Ok(match try_serve(ctx, req) {
+            Ok(r) => r,
+            Err(e) => http::Response::builder()
+                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                .body(format!("I/O error: {}", e).into())
+                .unwrap(),
+        })
+    })
 }
 
 fn main() {
@@ -75,13 +78,12 @@ fn main() {
 
     env_logger::init().unwrap();
     let addr = "127.0.0.1:1337".parse().unwrap();
-    let server = hyper::server::Http::new()
-        .bind_compat(&addr, move || Ok(MyService(ctx)))
-        .unwrap();
+    let server = hyper::server::Server::bind(&addr)
+        .serve(move || hyper::service::service_fn(move |req| serve(ctx, req)));
     println!(
         "Serving {} on http://{} with 1 thread.",
         ctx.path.to_string_lossy(),
-        server.local_addr().unwrap()
+        server.local_addr()
     );
-    server.run().unwrap();
+    tokio::run(server.map_err(|e| eprintln!("server error: {}", e)))
 }

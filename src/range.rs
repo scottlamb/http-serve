@@ -95,9 +95,9 @@ pub(crate) fn parse(range: Option<&HeaderValue>, len: u64) -> ResolvedRanges {
 
 #[cfg(test)]
 mod tests {
+    use super::{parse, ResolvedRanges};
     use http::header::HeaderValue;
     use smallvec::SmallVec;
-    use super::{parse, ResolvedRanges};
 
     /// Tests the specific examples enumerated in [RFC 2616 section
     /// 14.35.1](https://tools.ietf.org/html/rfc2616#section-14.35.1).
@@ -166,53 +166,47 @@ mod tests {
         );
     }
 
-    /*#[test]
+    #[test]
     fn test_resolve_ranges_satisfiability() {
         assert_eq!(
             ResolvedRanges::NotSatisfiable,
-            parse(Some(&Bytes(vec![ByteRangeSpec::AllFrom(10000)])), 10000)
+            parse(Some(&HeaderValue::from_static("bytes=10000-")), 10000)
         );
 
         let mut v = SmallVec::new();
         v.push(0..500);
         assert_eq!(
             ResolvedRanges::Satisfiable(v.clone()),
-            parse(
-                Some(&Bytes(vec![
-                    ByteRangeSpec::FromTo(0, 499),
-                    ByteRangeSpec::AllFrom(10000),
-                ])),
-                10000
-            )
+            parse(Some(&HeaderValue::from_static("bytes=0-499,10000-")), 10000)
         );
 
         assert_eq!(
             ResolvedRanges::NotSatisfiable,
-            parse(Some(&Bytes(vec![ByteRangeSpec::Last(1)])), 0)
+            parse(Some(&HeaderValue::from_static("bytes=-1")), 0)
         );
         assert_eq!(
             ResolvedRanges::NotSatisfiable,
-            parse(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0)])), 0)
+            parse(Some(&HeaderValue::from_static("bytes=0-0")), 0)
         );
         assert_eq!(
             ResolvedRanges::NotSatisfiable,
-            parse(Some(&Bytes(vec![ByteRangeSpec::AllFrom(0)])), 0)
+            parse(Some(&HeaderValue::from_static("bytes=0-")), 0)
         );
 
         v.clear();
         v.push(0..1);
         assert_eq!(
             ResolvedRanges::Satisfiable(v.clone()),
-            parse(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 0)])), 1)
+            parse(Some(&HeaderValue::from_static("bytes=0-0")), 1)
         );
 
         v.clear();
         v.push(0..500);
         assert_eq!(
             ResolvedRanges::Satisfiable(v.clone()),
-            parse(Some(&Bytes(vec![ByteRangeSpec::FromTo(0, 10000)])), 500)
+            parse(Some(&HeaderValue::from_static("bytes=0-10000")), 500)
         );
-    }*/
+    }
 
     #[test]
     fn test_resolve_ranges_absent_or_invalid() {

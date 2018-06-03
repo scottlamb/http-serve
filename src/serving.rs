@@ -6,17 +6,17 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use super::Entity;
 use etag;
-use futures::{self, Stream};
-use futures::stream;
 use futures::future;
-use http::{self, Method, Request, Response, StatusCode};
+use futures::stream;
+use futures::{self, Stream};
 use http::header::{self, HeaderMap, HeaderValue};
+use http::{self, Method, Request, Response, StatusCode};
 use httpdate::{fmt_http_date, parse_http_date};
-use hyper::{Body, Error};
+use hyper::body::Payload;
 use range;
 use smallvec::SmallVec;
-use super::Entity;
 use std::io::Write;
 use std::ops::Range;
 use std::time::SystemTime;
@@ -53,29 +53,33 @@ fn parse_modified_hdrs(
     Ok((precondition_failed, not_modified))
 }
 
-fn static_body<E: Entity>(s: &'static str) -> E::Body {
-    let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> =
-        Box::new(stream::once(Ok(s.as_bytes().into())));
-    body.into()
+fn static_body<E: Entity>(
+    s: &'static str,
+) -> Box<Stream<Item = E::Data, Error = E::Error> + Send> {
+    Box::new(stream::once(Ok(s.as_bytes().into())))
 }
 
-fn empty_body<E: Entity>() -> E::Body {
-    let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> = Box::new(stream::empty());
-    body.into()
+fn empty_body<E: Entity>() -> Box<Stream<Item = E::Data, Error = E::Error> + Send> {
+    Box::new(stream::empty())
 }
 
 /// Serves GET and HEAD requests for a given byte-ranged entity.
 /// Handles conditional & subrange requests.
 /// The caller is expected to have already determined the correct entity and appended
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
-pub fn serve<E: Entity>(e: E, req: &Request<Body>) -> Response<E::Body> {
+pub fn serve<
+    E: Entity,
+    P: Payload + From<Box<Stream<Item = E::Data, Error = E::Error> + Send>>,
+    PI,
+>(
+    e: E,
+    req: &Request<PI>,
+) -> Response<P> {
     if *req.method() != Method::GET && *req.method() != Method::HEAD {
         return Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
             .header(header::ALLOW, HeaderValue::from_static("get, head"))
-            .body(static_body::<E>(
-                "This resource only supports GET and HEAD.",
-            ))
+            .body(static_body::<E>("This resource only supports GET and HEAD.").into())
             .unwrap();
     }
 
@@ -87,7 +91,7 @@ pub fn serve<E: Entity>(e: E, req: &Request<Body>) -> Response<E::Body> {
             Err(s) => {
                 return Response::builder()
                     .status(StatusCode::BAD_REQUEST)
-                    .body(static_body::<E>(s))
+                    .body(static_body::<E>(s).into())
                     .unwrap()
             }
             Ok(p) => p,
@@ -142,12 +146,13 @@ pub fn serve<E: Entity>(e: E, req: &Request<Body>) -> Response<E::Body> {
 
     if precondition_failed {
         res.status(StatusCode::PRECONDITION_FAILED);
-        return res.body(static_body::<E>("Precondition failed")).unwrap();
+        return res.body(static_body::<E>("Precondition failed").into())
+            .unwrap();
     }
 
     if not_modified {
         res.status(StatusCode::NOT_MODIFIED);
-        return res.body(empty_body::<E>()).unwrap();
+        return res.body(empty_body::<E>().into()).unwrap();
     }
 
     let len = e.len();
@@ -185,7 +190,7 @@ pub fn serve<E: Entity>(e: E, req: &Request<Body>) -> Response<E::Body> {
                 fmt_ascii_val!(MAX_DECIMAL_U64_BYTES + "bytes */".len(), "bytes */{}", len),
             );
             res.status(StatusCode::RANGE_NOT_SATISFIABLE);
-            return res.body(empty_body::<E>()).unwrap();
+            return res.body(empty_body::<E>().into()).unwrap();
         }
     };
     res.header(
@@ -193,13 +198,10 @@ pub fn serve<E: Entity>(e: E, req: &Request<Body>) -> Response<E::Body> {
         fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", range.end - range.start),
     );
     let body = match *req.method() {
-        Method::HEAD => {
-            let b: Box<Stream<Item = E::Chunk, Error = Error> + Send> = Box::new(stream::empty());
-            b.into()
-        }
+        Method::HEAD => empty_body::<E>(),
         _ => e.get_range(range),
     };
-    let mut res = res.body(body).unwrap();
+    let mut res = res.body(body.into()).unwrap();
     if include_entity_headers {
         e.add_headers(res.headers_mut());
     }
@@ -213,11 +215,11 @@ enum InnerBody<B, C> {
 
 impl<B, C> Stream for InnerBody<B, C>
 where
-    B: Stream<Item = C, Error = Error>,
+    B: Stream<Item = C>,
 {
     type Item = C;
-    type Error = Error;
-    fn poll(&mut self) -> ::futures::Poll<Option<C>, Error> {
+    type Error = B::Error;
+    fn poll(&mut self) -> ::futures::Poll<Option<C>, Self::Error> {
         match *self {
             InnerBody::Once(ref mut o) => Ok(futures::Async::Ready(o.take())),
             InnerBody::B(ref mut b) => b.poll(),
@@ -225,14 +227,18 @@ where
     }
 }
 
-fn send_multipart<E: Entity>(
+fn send_multipart<
+    E: Entity,
+    P: Payload + From<Box<Stream<Item = E::Data, Error = E::Error> + Send>>,
+    PI,
+>(
     e: E,
-    req: &Request<Body>,
+    req: &Request<PI>,
     mut res: http::response::Builder,
     rs: SmallVec<[Range<u64>; 1]>,
     len: u64,
     include_entity_headers: bool,
-) -> Response<E::Body> {
+) -> Response<P> {
     let mut body_len = 0;
     let mut each_part_headers = Vec::new();
     if include_entity_headers {
@@ -280,10 +286,10 @@ fn send_multipart<E: Entity>(
     res.status(StatusCode::PARTIAL_CONTENT);
 
     if *req.method() == Method::HEAD {
-        return res.body(empty_body::<E>()).unwrap();
+        return res.body(empty_body::<E>().into()).unwrap();
     }
 
-    // Create bodies, a stream of E::Body values as follows: each part's header and body
+    // Create bodies, a stream of E::Stream values as follows: each part's header and body
     // (the latter produced lazily), then the overall trailer.
     let bodies = ::futures::stream::unfold(0, move |state| {
         let i = state >> 1;
@@ -298,9 +304,9 @@ fn send_multipart<E: Entity>(
             let v = ::std::mem::replace(&mut part_headers[i], Vec::new());
             InnerBody::Once(Some(v.into()))
         };
-        Some(future::ok::<_, Error>((body, state + 1)))
+        Some(future::ok::<_, E::Error>((body, state + 1)))
     });
 
-    let body: Box<Stream<Item = E::Chunk, Error = Error> + Send> = Box::new(bodies.flatten());
+    let body: Box<Stream<Item = E::Data, Error = E::Error> + Send> = Box::new(bodies.flatten());
     res.body(body.into()).unwrap()
 }

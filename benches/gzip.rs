@@ -17,32 +17,24 @@ extern crate lazy_static;
 extern crate mime;
 extern crate reqwest;
 extern crate test;
+extern crate tokio;
 
+use futures::Future;
 use http::{Request, Response};
 use http_serve::streaming_body;
-use hyper::Error;
-use futures::stream::Stream;
+use hyper::Body;
 use std::io::{Read, Write};
 use std::str::FromStr;
 
 static WONDERLAND: &[u8] = include_bytes!("wonderland.txt");
 
-struct MyService;
-
-impl hyper::server::Service for MyService {
-    type Request = Request<hyper::Body>;
-    type Response = Response<Box<Stream<Item = Vec<u8>, Error = Error> + Send>>;
-    type Error = Error;
-    type Future = futures::future::FutureResult<Self::Response, Error>;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
-        let l = u32::from_str(&req.uri().path()[1..]).unwrap();
-        let (resp, w) = streaming_body(&req).with_gzip_level(l).build();
-        if let Some(mut w) = w {
-            w.write_all(WONDERLAND).unwrap();
-        }
-        futures::future::ok(resp)
+fn serve_req(req: Request<Body>) -> Response<Body> {
+    let l = u32::from_str(&req.uri().path()[1..]).unwrap();
+    let (resp, w) = streaming_body(&req).with_gzip_level(l).build();
+    if let Some(mut w) = w {
+        w.write_all(WONDERLAND).unwrap();
     }
+    resp
 }
 
 /// Returns the hostport of a newly created, never-destructed server.
@@ -50,12 +42,11 @@ fn new_server() -> String {
     let (tx, rx) = ::std::sync::mpsc::channel();
     ::std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
-        let server = hyper::server::Http::new()
-            .bind_compat(&addr, || Ok(MyService))
-            .unwrap();
-        let addr = server.local_addr().unwrap();
+        let server =
+            hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn_ok(serve_req));
+        let addr = server.local_addr();
         tx.send(addr).unwrap();
-        server.run().unwrap()
+        tokio::run(server.map_err(|e| panic!(e)))
     });
     let addr = rx.recv().unwrap();
     format!("http://{}:{}", addr.ip(), addr.port())

@@ -14,47 +14,34 @@ extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
 extern crate reqwest;
-extern crate tokio_core as tokio;
+extern crate tokio;
 
-use futures::Stream;
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::{Future, Stream};
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
 
-type Body = Box<Stream<Item = Vec<u8>, Error = hyper::Error> + Send + 'static>;
-
-struct MyService(tokio::reactor::Remote);
-
-impl hyper::server::Service for MyService {
-    type Request = http::Request<hyper::Body>;
-    type Response = http::Response<Body>;
-    type Error = hyper::Error;
-    type Future = ::futures::future::FutureResult<Self::Response, hyper::Error>;
-
-    fn call(&self, req: Self::Request) -> Self::Future {
-        let cmds = CMDS.lock().unwrap().remove(req.uri().path()).unwrap();
-        let (resp, w) = http_serve::streaming_body(&req).build();
-        let mut w = w.unwrap();
-        self.0.spawn(|_| {
-            cmds.for_each(move |cmd| {
-                match cmd {
-                    Cmd::WriteAll(s) => w.write_all(s).unwrap(),
-                    Cmd::Abort => w.abort(),
-                    Cmd::Flush => w.flush().unwrap(),
-                }
-                futures::future::ok(())
-            })
-        });
-        futures::future::ok(resp)
-    }
+fn serve(req: http::Request<hyper::Body>) -> http::Response<hyper::Body> {
+    let cmds = CMDS.lock().unwrap().remove(req.uri().path()).unwrap();
+    let (resp, w) = http_serve::streaming_body(&req).build();
+    let mut w = w.unwrap();
+    tokio::spawn(cmds.for_each(move |cmd| {
+        match cmd {
+            Cmd::WriteAll(s) => w.write_all(s).unwrap(),
+            Cmd::Abort(e) => w.abort(e),
+            Cmd::Flush => w.flush().unwrap(),
+        }
+        futures::future::ok(())
+    }));
+    resp
 }
 
 #[derive(Debug)]
 enum Cmd {
     WriteAll(&'static [u8]),
     Flush,
-    Abort,
+    Abort(Box<::std::error::Error + Send + Sync>),
 }
 
 struct Server {
@@ -63,25 +50,16 @@ struct Server {
 
 fn new_server() -> Server {
     let (server_tx, server_rx) = ::std::sync::mpsc::channel();
-    let (remote_tx, remote_rx) = ::std::sync::mpsc::channel();
-    ::std::thread::spawn(move || {
-        let mut core = tokio::reactor::Core::new().unwrap();
-        remote_tx.send(core.remote()).unwrap();
-        core.run(futures::future::empty::<(), ()>()).unwrap()
-    });
     ::std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
-        let r = remote_rx.recv().unwrap();
-        let srv = hyper::server::Http::new()
-            .bind_compat(&addr, move || Ok(MyService(r.clone())))
-            .unwrap();
-        let addr = srv.local_addr().unwrap();
+        let srv = hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn_ok(serve));
+        let addr = srv.local_addr();
         server_tx
             .send(Server {
                 addr: format!("http://{}:{}", addr.ip(), addr.port()),
             })
             .unwrap();
-        srv.run().unwrap();
+        tokio::run(srv.map_err(|e| eprintln!("server error: {}", e)))
     });
     server_rx.recv().unwrap()
 }
@@ -142,7 +120,10 @@ fn abort(path: &'static str, auto_gzip: bool) {
     resp.read_exact(&mut buf).unwrap();
     assert_eq!(b"1234", &buf);
 
-    cmds.unbounded_send(Cmd::Abort).unwrap();
+    cmds.unbounded_send(Cmd::Abort(Box::new(io::Error::new(
+        io::ErrorKind::Other,
+        "foo",
+    )))).unwrap();
     assert_eq!(
         io::ErrorKind::UnexpectedEof,
         resp.read(&mut buf).unwrap_err().kind()
