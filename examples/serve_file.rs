@@ -76,7 +76,7 @@ fn main() {
         pool: CpuPool::new(1),
     }).leak();
 
-    env_logger::init().unwrap();
+    env_logger::init();
     let addr = "127.0.0.1:1337".parse().unwrap();
     let server = hyper::server::Server::bind(&addr)
         .serve(move || hyper::service::service_fn(move |req| serve(ctx, req)));

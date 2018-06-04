@@ -115,7 +115,7 @@ lazy_static! {
 
 #[test]
 fn serve_without_etag() {
-    let _ = env_logger::init();
+    let _ = env_logger::try_init();
     let client = reqwest::Client::new();
     let mut buf = Vec::new();
     let url = format!("{}/none", *SERVER);
@@ -345,7 +345,7 @@ fn serve_without_etag() {
 
 #[test]
 fn serve_with_strong_etag() {
-    let _ = env_logger::init();
+    let _ = env_logger::try_init();
     let client = reqwest::Client::new();
     let mut buf = Vec::new();
     let url = format!("{}/strong", *SERVER);
@@ -466,7 +466,7 @@ fn serve_with_strong_etag() {
 
 #[test]
 fn serve_with_weak_etag() {
-    let _ = env_logger::init();
+    let _ = env_logger::try_init();
     let client = reqwest::Client::new();
     let mut buf = Vec::new();
     let url = format!("{}/weak", *SERVER);

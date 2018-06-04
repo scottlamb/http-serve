@@ -82,7 +82,7 @@ fn setup_req(
 }
 
 fn basic(path: &'static str, auto_gzip: bool) {
-    let _ = env_logger::init();
+    let _ = env_logger::try_init();
     let (cmds, mut req) = setup_req(path, auto_gzip);
     let mut resp = req.send().unwrap();
 
@@ -109,7 +109,7 @@ fn auto_gzip() {
 }
 
 fn abort(path: &'static str, auto_gzip: bool) {
-    let _ = env_logger::init();
+    let _ = env_logger::try_init();
     let (cmds, mut req) = setup_req(path, auto_gzip);
     let mut resp = req.send().unwrap();
 
@@ -143,7 +143,7 @@ fn auto_gzip_abort() {
 #[test]
 fn manual_gzip() {
     use reqwest::header;
-    let _ = env_logger::init();
+    let _ = env_logger::try_init();
     let (cmds, mut req) = setup_req("/manual_gzip", false);
     let mut resp = req.header(header::AcceptEncoding(vec![
         header::qitem(header::Encoding::Gzip),
