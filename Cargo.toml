@@ -7,6 +7,7 @@ readme = "../README.md"
 description = "Conditional GET, HEAD, and byte range serving for abstract HTTP entities."
 keywords = ["http", "file", "range"]
 categories = ["web-programming::http-server"]
+repository = "https://github.com/scottlamb/http-serve"
 
 [badges]
 travis-ci = { repository = "scottlamb/http-serve" }
