@@ -55,15 +55,13 @@
 //!
 //! # Why the weird type bounds? Why not use `hyper::Body` and `hyper::Chunk` for everything?
 //!
-//! `hyper::Chunk` is fine in most cases. There are times when it's desirable to have more flexible
-//! ownership provided by a type such as `reffers::ARefs<'static, [u8]>`. One is `mmap`-based
-//! file serving: a `hyper::Chunk` would require copying the data in each chunk. An implementation
-//! with `ARefs` could instead `mmap` and `mlock` the data on another thread and provide chunks
-//! which `munmap` when dropped.
-//!
-//! `hyper::Body` unfortunately can't be used with either `serve` or `streaming_body`; they need a
-//! `Box<::futures::stream::Stream<Self::Chunk, ::hyper::Error> + Send + 'static>` or something
-//! that can be constructed from that type.
+//! These bounds are compatible with `hyper::Body` and `hyper::Chunk`, and most callers will use
+//! those types. There are times when it's desirable to have more flexible ownership provided by a
+//! type such as `reffers::ARefs<'static, [u8]>`. One is `mmap`-based file serving: a
+//! `hyper::Chunk` would require copying the data in each chunk. An implementation with `ARefs`
+//! could instead `mmap` and `mlock` the data on another thread and provide chunks which `munmap`
+//! when dropped. In these cases, the caller can supply an alternate implementation of the
+//! `hyper::Payload` trait which uses a different `Data` type than `hyper::Chunk`.
 
 extern crate bytes;
 extern crate flate2;
