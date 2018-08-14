@@ -11,6 +11,7 @@
 
 #![feature(test)]
 
+extern crate bytes;
 extern crate futures;
 extern crate http;
 extern crate http_serve;
@@ -22,6 +23,7 @@ extern crate reqwest;
 extern crate test;
 extern crate tokio;
 
+use bytes::{Bytes, BytesMut};
 use futures::{future, stream};
 use futures::{Future, Stream};
 use http::header::HeaderValue;
@@ -35,21 +37,22 @@ use std::time::SystemTime;
 
 static WONDERLAND: &[u8] = include_bytes!("wonderland.txt");
 
-struct WonderlandEntity;
+struct BytesEntity(Bytes);
 
-impl http_serve::Entity for WonderlandEntity {
+impl http_serve::Entity for BytesEntity {
     type Data = hyper::Chunk;
     type Error = Box<::std::error::Error + Send + Sync>;
 
     fn len(&self) -> u64 {
-        WONDERLAND.len() as u64
+        self.0.len() as u64
     }
     fn get_range(
         &self,
         range: Range<u64>,
     ) -> Box<Stream<Item = Self::Data, Error = Self::Error> + Send> {
-        Box::new(stream::once(Ok(WONDERLAND
-            [range.start as usize..range.end as usize]
+        Box::new(stream::once(Ok(self
+            .0
+            .slice(range.start as usize, range.end as usize)
             .into())))
     }
     fn add_headers(&self, headers: &mut http::header::HeaderMap) {
@@ -69,9 +72,15 @@ impl http_serve::Entity for WonderlandEntity {
 fn serve_req(req: Request<Body>) -> Response<Body> {
     let path = req.uri().path();
     match path.as_bytes()[1] {
-        b'e' => {
-            // entity
-            http_serve::serve(WonderlandEntity, &req)
+        b's' => {
+            // static entity
+            http_serve::serve(BytesEntity(Bytes::from_static(WONDERLAND)), &req)
+        }
+        b'c' => {
+            // copied entity
+            let mut b = BytesMut::with_capacity(WONDERLAND.len());
+            b.extend_from_slice(WONDERLAND);
+            http_serve::serve(BytesEntity(b.freeze()), &req)
         }
         b'b' => {
             // chunked, data written before returning the Response.
@@ -139,8 +148,13 @@ fn serve(b: &mut test::Bencher, path: &str) {
 }
 
 #[bench]
-fn serve_entity(b: &mut test::Bencher) {
-    serve(b, "e");
+fn serve_static_entity(b: &mut test::Bencher) {
+    serve(b, "s");
+}
+
+#[bench]
+fn serve_copied_entity(b: &mut test::Bencher) {
+    serve(b, "c");
 }
 
 #[bench]
