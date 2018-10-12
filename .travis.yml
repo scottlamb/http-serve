@@ -1,3 +1,6 @@
+os:
+  - windows
+  - linux
 language: rust
 rust:
   - stable
@@ -6,8 +9,10 @@ rust:
 matrix:
   allow_failures:
     - rust: nightly
+  fast_finish: true
 cache: cargo
 script:
+  - 'if [ $TRAVIS_OS_NAME = windows ]; then choco install windows-sdk-10.0; fi'
   - cargo build --verbose --all
   - cargo test --verbose --all
   - 'if [ $TRAVIS_RUST_VERSION = nightly ]; then cargo bench --verbose --all; fi'
