@@ -6,16 +6,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use Entity;
 use bytes::Buf;
 use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
 use http::header::{HeaderMap, HeaderValue};
+use platform::{self, FileExt};
 use std::io;
 use std::ops::Range;
-use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Arc;
 use std::time::{self, SystemTime};
+use Entity;
 
 // This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
 // a tradeoff between memory usage and thread handoffs.
@@ -58,10 +58,12 @@ where
         headers: HeaderMap,
     ) -> Result<Self, io::Error> {
         let m = file.metadata()?;
+        let inode = platform::file_inode(&file, &m)?;
+
         Ok(ChunkedReadFile {
             inner: Arc::new(ChunkedReadFileInner {
                 len: m.len(),
-                inode: m.ino(),
+                inode,
                 mtime: m.modified()?,
                 headers,
                 f: file,
@@ -118,7 +120,7 @@ where
             }
             None => Box::new(stream),
         };
-        stream.into()
+        stream
     }
 
     fn add_headers(&self, h: &mut HeaderMap) {
@@ -133,7 +135,8 @@ where
     fn etag(&self) -> Option<HeaderValue> {
         // This etag format is similar to Apache's. The etag should change if the file is modified
         // or replaced. The length is probably redundant but doesn't harm anything.
-        let dur = self.inner
+        let dur = self
+            .inner
             .mtime
             .duration_since(time::UNIX_EPOCH)
             .expect("modification time must be after epoch");

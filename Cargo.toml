@@ -25,6 +25,9 @@ smallvec = "0.6.1"
 time = "0.1.40"
 unicase = "2.1.0"
 
+[target.'cfg(windows)'.dependencies]
+winapi = { version = "0.3.6", features = ["std", "winbase"] }
+
 [dev-dependencies]
 env_logger = "0.5.10"
 lazy_static = "1.0.1"

@@ -74,6 +74,8 @@ extern crate mime;
 extern crate smallvec;
 extern crate time;
 extern crate unicase;
+#[cfg(windows)]
+extern crate winapi;
 
 use bytes::Buf;
 use futures::Stream;
@@ -100,6 +102,7 @@ mod chunker;
 mod etag;
 mod file;
 mod gzip;
+mod platform;
 mod range;
 mod serving;
 
