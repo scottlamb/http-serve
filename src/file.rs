@@ -57,14 +57,13 @@ where
         pool: Option<CpuPool>,
         headers: HeaderMap,
     ) -> Result<Self, io::Error> {
-        let m = file.metadata()?;
-        let inode = platform::file_inode(&file, &m)?;
+        let info = platform::file_info(&file)?;
 
         Ok(ChunkedReadFile {
             inner: Arc::new(ChunkedReadFileInner {
-                len: m.len(),
-                inode,
-                mtime: m.modified()?,
+                len: info.len,
+                inode: info.inode,
+                mtime: info.mtime,
                 headers,
                 f: file,
                 pool: pool,

@@ -1,5 +1,6 @@
-use std::fs::{File, Metadata};
+use std::fs::File;
 use std::io;
+use std::time::SystemTime;
 
 pub trait FileExt {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize>;
@@ -21,15 +22,42 @@ impl FileExt for ::std::fs::File {
     }
 }
 
-#[cfg(unix)]
-pub fn file_inode(_file: &File, metadata: &Metadata) -> io::Result<u64> {
-    use std::os::unix::fs::MetadataExt;
-
-    Ok(metadata.ino())
+pub struct FileInfo {
+    pub inode: u64,
+    pub len: u64,
+    pub mtime: SystemTime,
 }
 
 #[cfg(windows)]
-pub fn file_inode(file: &File, _metadata: &Metadata) -> io::Result<u64> {
+fn filetime_to_systemtime(time: ::winapi::shared::minwindef::FILETIME) -> SystemTime {
+    use std::time::{Duration, UNIX_EPOCH};
+
+    let ticks = (time.dwHighDateTime as u64) << 32 | time.dwLowDateTime as u64;
+
+    const SECS_TO_UNIX_EPOCH: u64 = 11_644_473_600;
+    let secs = ticks / 10_000_000 - SECS_TO_UNIX_EPOCH;
+    let nanos = (ticks % 10_000_000 * 100) as u32;
+
+    let duration = Duration::new(secs, nanos);
+    UNIX_EPOCH + duration
+}
+
+#[cfg(unix)]
+pub fn file_info(file: &File) -> io::Result<FileInfo> {
+    use std::os::unix::fs::MetadataExt;
+
+    let metadata = file.metadata()?;
+    let info = FileInfo {
+        inode: metadata.ino(),
+        len: metadata.len(),
+        mtime: metadata.modified()?,
+    };
+
+    Ok(info)
+}
+
+#[cfg(windows)]
+pub fn file_info(file: &File) -> io::Result<FileInfo> {
     use std::os::windows::io::AsRawHandle;
     use winapi::shared::minwindef::FILETIME;
     use winapi::um::fileapi::{self, BY_HANDLE_FILE_INFORMATION};
@@ -51,9 +79,15 @@ pub fn file_inode(file: &File, _metadata: &Metadata) -> io::Result<u64> {
         nFileIndexHigh: 0,
         nFileIndexLow: 0,
     };
-    if unsafe { fileapi::GetFileInformationByHandle(handle, &mut info) } != 0 {
-        Ok((info.nFileIndexHigh as u64) << 32 | (info.nFileIndexLow as u64))
+
+    let inode = if unsafe { fileapi::GetFileInformationByHandle(handle, &mut info) } != 0 {
+        (info.nFileIndexHigh as u64) << 32 | info.nFileIndexLow as u64
     } else {
-        Err(io::Error::last_os_error())
-    }
+        return Err(io::Error::last_os_error());
+    };
+    let mtime = filetime_to_systemtime(info.ftLastWriteTime);
+    let len = (info.nFileSizeHigh as u64) << 32 | info.nFileSizeLow as u64;
+
+    let info = FileInfo { inode, len, mtime };
+    Ok(info)
 }
