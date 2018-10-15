@@ -73,7 +73,6 @@ extern crate hyper;
 extern crate mime;
 extern crate smallvec;
 extern crate time;
-extern crate unicase;
 #[cfg(windows)]
 extern crate winapi;
 
