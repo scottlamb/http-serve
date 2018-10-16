@@ -72,7 +72,6 @@ extern crate httpdate;
 extern crate hyper;
 extern crate mime;
 extern crate smallvec;
-extern crate time;
 #[cfg(windows)]
 extern crate winapi;
 
