@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Scott Lamb <slamb@slamb.org>
+// Copyright (c) 2016-2018 The http-serve developers
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE.txt or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license

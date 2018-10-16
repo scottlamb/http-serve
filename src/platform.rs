@@ -1,3 +1,11 @@
+// Copyright (c) 2016-2018 The http-serve developers
+//
+// Licensed under the Apache License, Version 2.0 <LICENSE-APACHE.txt or
+// http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
+// <LICENSE-MIT.txt or http://opensource.org/licenses/MIT>, at your
+// option. This file may not be copied, modified, or distributed
+// except according to those terms.
+
 use std::fs::File;
 use std::io;
 use std::time::SystemTime;

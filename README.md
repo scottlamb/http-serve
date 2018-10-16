@@ -55,9 +55,9 @@ Try the example:
 $ cargo run --example serve_file /usr/share/dict/words
 ```
 
-## Author
+## Authors
 
-Scott Lamb, slamb@slamb.org
+See the [AUTHORS] file for details.
 
 ## License
 
