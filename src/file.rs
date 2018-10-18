@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Scott Lamb <slamb@slamb.org>
+// Copyright (c) 2016-2018 The http-serve developers
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE.txt or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -6,16 +6,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use Entity;
 use bytes::Buf;
 use futures::{Sink, Stream};
 use futures_cpupool::CpuPool;
 use http::header::{HeaderMap, HeaderValue};
+use platform::{self, FileExt};
 use std::io;
 use std::ops::Range;
-use std::os::unix::fs::{FileExt, MetadataExt};
 use std::sync::Arc;
 use std::time::{self, SystemTime};
+use Entity;
 
 // This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
 // a tradeoff between memory usage and thread handoffs.
@@ -57,12 +57,13 @@ where
         pool: Option<CpuPool>,
         headers: HeaderMap,
     ) -> Result<Self, io::Error> {
-        let m = file.metadata()?;
+        let info = platform::file_info(&file)?;
+
         Ok(ChunkedReadFile {
             inner: Arc::new(ChunkedReadFileInner {
-                len: m.len(),
-                inode: m.ino(),
-                mtime: m.modified()?,
+                len: info.len,
+                inode: info.inode,
+                mtime: info.mtime,
                 headers,
                 f: file,
                 pool: pool,
@@ -118,7 +119,7 @@ where
             }
             None => Box::new(stream),
         };
-        stream.into()
+        stream
     }
 
     fn add_headers(&self, h: &mut HeaderMap) {
@@ -133,7 +134,8 @@ where
     fn etag(&self) -> Option<HeaderValue> {
         // This etag format is similar to Apache's. The etag should change if the file is modified
         // or replaced. The length is probably redundant but doesn't harm anything.
-        let dur = self.inner
+        let dur = self
+            .inner
             .mtime
             .duration_since(time::UNIX_EPOCH)
             .expect("modification time must be after epoch");

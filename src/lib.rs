@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 Scott Lamb <slamb@slamb.org>
+// Copyright (c) 2016-2018 The http-serve developers
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE.txt or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -72,8 +72,8 @@ extern crate httpdate;
 extern crate hyper;
 extern crate mime;
 extern crate smallvec;
-extern crate time;
-extern crate unicase;
+#[cfg(windows)]
+extern crate winapi;
 
 use bytes::Buf;
 use futures::Stream;
@@ -100,6 +100,7 @@ mod chunker;
 mod etag;
 mod file;
 mod gzip;
+mod platform;
 mod range;
 mod serving;
 
