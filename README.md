@@ -57,7 +57,7 @@ $ cargo run --example serve_file /usr/share/dict/words
 
 ## Authors
 
-See the [AUTHORS] file for details.
+See the [AUTHORS](AUTHORS) file for details.
 
 ## License
 
