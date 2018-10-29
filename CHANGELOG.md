@@ -1,4 +1,4 @@
-# unreleased
+# 0.1.2
 
 * Upgrade tests to reqwest 0.9 (#13)
 
