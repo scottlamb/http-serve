@@ -18,6 +18,7 @@ extern crate tokio;
 
 use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::{Future, Stream};
+use http::header;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
@@ -83,7 +84,7 @@ fn setup_req(
 
 fn basic(path: &'static str, auto_gzip: bool) {
     let _ = env_logger::try_init();
-    let (cmds, mut req) = setup_req(path, auto_gzip);
+    let (cmds, req) = setup_req(path, auto_gzip);
     let mut resp = req.send().unwrap();
 
     cmds.unbounded_send(Cmd::WriteAll(b"1234")).unwrap();
@@ -92,10 +93,7 @@ fn basic(path: &'static str, auto_gzip: bool) {
     let mut buf = Vec::new();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"12345678", &buf[..]);
-    assert_eq!(
-        None,
-        resp.headers().get::<reqwest::header::ContentEncoding>()
-    );
+    assert_eq!(None, resp.headers().get(header::CONTENT_ENCODING));
 }
 
 #[test]
@@ -110,7 +108,7 @@ fn auto_gzip() {
 
 fn abort(path: &'static str, auto_gzip: bool) {
     let _ = env_logger::try_init();
-    let (cmds, mut req) = setup_req(path, auto_gzip);
+    let (cmds, req) = setup_req(path, auto_gzip);
     let mut resp = req.send().unwrap();
 
     cmds.unbounded_send(Cmd::WriteAll(b"1234")).unwrap();
@@ -121,11 +119,11 @@ fn abort(path: &'static str, auto_gzip: bool) {
     assert_eq!(b"1234", &buf);
 
     cmds.unbounded_send(Cmd::Abort(Box::new(io::Error::new(
-        io::ErrorKind::Other,
+        io::ErrorKind::PermissionDenied,  // note: not related to error kind below.
         "foo",
     )))).unwrap();
     assert_eq!(
-        io::ErrorKind::UnexpectedEof,
+        io::ErrorKind::Other,
         resp.read(&mut buf).unwrap_err().kind()
     );
 }
@@ -144,19 +142,13 @@ fn auto_gzip_abort() {
 fn manual_gzip() {
     use reqwest::header;
     let _ = env_logger::try_init();
-    let (cmds, mut req) = setup_req("/manual_gzip", false);
-    let mut resp = req.header(header::AcceptEncoding(vec![
-        header::qitem(header::Encoding::Gzip),
-    ])).send()
-        .unwrap();
+    let (cmds, req) = setup_req("/manual_gzip", false);
+    let mut resp = req.header("Accept-Encoding", "gzip").send().unwrap();
 
     cmds.unbounded_send(Cmd::WriteAll(b"1234")).unwrap();
     drop(cmds);
     let mut buf = Vec::new();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"\x1f\x8b", &buf[..2]); // gzip magic number.
-    assert_eq!(
-        Some(&header::ContentEncoding(vec![header::Encoding::Gzip])),
-        resp.headers().get()
-    );
+    assert_eq!(resp.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
 }
