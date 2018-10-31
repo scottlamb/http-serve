@@ -5,8 +5,19 @@ language: rust
 rust:
   - stable
   - beta
-cache: cargo
 script:
   - cargo build --all
   - cargo test --all
   - cargo bench --all
+
+cache:
+  cargo: true
+  timeout: 300
+
+# See <https://gist.github.com/jkcclemens/000456ca646bd502cac0dbddcb8fa307>
+before_cache:
+  - rm -rf target/debug/{deps/,incremental/,.fingerprint/,}{{entity,chunked}_acceptance,{lib,}http[_-]serve}-*
+  - rm -rf target/debug/examples/serve_file*
+  - rm -rf target/release/{deps/,.fingerprint/,}{inmem,file,{lib,}http[_-]serve}-*
+  - rm -rf target/criterion
+  - cargo clean -p http-serve
