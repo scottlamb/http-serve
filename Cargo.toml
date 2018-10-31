@@ -27,6 +27,7 @@ smallvec = "0.6.1"
 winapi = { version = "0.3.6", features = ["std", "winbase"] }
 
 [dev-dependencies]
+criterion = "0.2"
 env_logger = "0.5.10"
 lazy_static = "1.0.1"
 leak = "0.1.2"
@@ -37,3 +38,11 @@ tokio = "0.1.6"
 
 [profile.release]
 debug = true
+
+[[bench]]
+name = "file"
+harness = false
+
+[[bench]]
+name = "inmem"
+harness = false

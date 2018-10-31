@@ -6,8 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#![feature(test)]
-
+#[macro_use]
+extern crate criterion;
 extern crate futures;
 extern crate futures_cpupool;
 extern crate http;
@@ -18,9 +18,9 @@ extern crate lazy_static;
 extern crate mime;
 extern crate reqwest;
 extern crate tempdir;
-extern crate test;
 extern crate tokio;
 
+use criterion::Criterion;
 use futures::Future;
 use futures_cpupool::{CpuFuture, CpuPool};
 use http::{Request, Response};
@@ -77,38 +77,24 @@ fn setup(kib: usize) -> TempDir {
     tmpdir
 }
 
-fn serve_full_entity(b: &mut test::Bencher, kib: usize) {
-    let _tmpdir = setup(kib);
+fn serve_full_entity(b: &mut criterion::Bencher, kib: &usize) {
+    let _tmpdir = setup(*kib);
     let client = reqwest::Client::new();
-    let mut buf = Vec::with_capacity(kib);
-    let mut run = || {
+    let mut buf = Vec::with_capacity(*kib);
+    b.iter(|| {
         let mut resp = client.get(&*SERVER).send().unwrap();
         buf.clear();
         let size = resp.read_to_end(&mut buf).unwrap();
         assert_eq!(http::StatusCode::OK, resp.status());
-        assert_eq!(1024 * kib, size);
-    };
-    run(); // warm.
-    b.iter(run);
-    b.bytes = 1024 * kib as u64;
+        assert_eq!(1024 * *kib, size);
+    });
 }
 
-#[bench]
-fn serve_full_entity_1mib(b: &mut test::Bencher) {
-    serve_full_entity(b, 1024);
-}
-
-#[bench]
-fn serve_full_entity_1kib(b: &mut test::Bencher) {
-    serve_full_entity(b, 1);
-}
-
-#[bench]
-fn serve_last_byte_1mib(b: &mut test::Bencher) {
+fn serve_last_byte_1mib(b: &mut criterion::Bencher) {
     let _tmpdir = setup(1024);
     let client = reqwest::Client::new();
     let mut buf = Vec::with_capacity(1);
-    let mut run = || {
+    b.iter(|| {
         let mut resp = client
             .get(&*SERVER)
             .header("Range", "bytes=-1")
@@ -118,7 +104,18 @@ fn serve_last_byte_1mib(b: &mut test::Bencher) {
         let size = resp.read_to_end(&mut buf).unwrap();
         assert_eq!(http::StatusCode::PARTIAL_CONTENT, resp.status());
         assert_eq!(1, size);
-    };
-    run(); // warm.
-    b.iter(run);
+    });
 }
+
+fn criterion_benchmark(c: &mut Criterion) {
+    c.bench("serve_full_entity",
+            criterion::Benchmark::new("1kib", |b| serve_full_entity(b, &1))
+            .throughput(criterion::Throughput::Bytes(1024)));
+    c.bench("serve_full_entity",
+            criterion::Benchmark::new("1mib", |b| serve_full_entity(b, &1024))
+            .throughput(criterion::Throughput::Bytes(1024 * 1024)));
+    c.bench_function("serve_last_byte_1mib", serve_last_byte_1mib);
+}
+
+criterion_group!(benches, criterion_benchmark);
+criterion_main!(benches);

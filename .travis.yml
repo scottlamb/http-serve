@@ -5,13 +5,8 @@ language: rust
 rust:
   - stable
   - beta
-  - nightly
-matrix:
-  allow_failures:
-    - rust: nightly
-  fast_finish: true
 cache: cargo
 script:
-  - cargo build --verbose --all
-  - cargo test --verbose --all
-  - 'if [ $TRAVIS_RUST_VERSION = nightly ]; then cargo bench --verbose --all; fi'
+  - cargo build --all
+  - cargo test --all
+  - cargo bench --all

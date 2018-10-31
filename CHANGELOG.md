@@ -1,3 +1,8 @@
+# unreleased
+
+* Convert benchmarks to [criterion](https://crates.io/crates/criterion)
+  to support running with stable Rust.
+
 # 0.1.2
 
 * Upgrade tests to reqwest 0.9 (#13)

@@ -9,8 +9,8 @@
 //! Benchmarks of serving data built in to the binary via `include_bytes!`, using both the
 //! `serve` function on an `Entity` and the `streaming_body` method.
 
-#![feature(test)]
-
+#[macro_use]
+extern crate criterion;
 extern crate bytes;
 extern crate futures;
 extern crate http;
@@ -20,10 +20,10 @@ extern crate hyper;
 extern crate lazy_static;
 extern crate mime;
 extern crate reqwest;
-extern crate test;
 extern crate tokio;
 
 use bytes::{Bytes, BytesMut};
+use criterion::Criterion;
 use futures::{future, stream};
 use futures::{Future, Stream};
 use http::header::HeaderValue;
@@ -126,7 +126,7 @@ lazy_static! {
     static ref SERVER: String = { new_server() };
 }
 
-fn serve(b: &mut test::Bencher, path: &str) {
+fn serve(b: &mut criterion::Bencher, path: &str) {
     let client = reqwest::Client::new();
 
     // Add enough buffer space for the uncompressed representation and some extra header stuff.
@@ -144,70 +144,30 @@ fn serve(b: &mut test::Bencher, path: &str) {
     };
     run(); // warm.
     b.iter(run);
-    b.bytes = WONDERLAND.len() as u64;
 }
 
-#[bench]
-fn serve_static_entity(b: &mut test::Bencher) {
-    serve(b, "s");
+fn criterion_benchmark(c: &mut Criterion) {
+    c.bench("serve",
+            criterion::Benchmark::new("static", |b| serve(b, "s"))
+            .throughput(criterion::Throughput::Bytes(WONDERLAND.len() as u32)));
+    c.bench("serve",
+            criterion::Benchmark::new("copied", |b| serve(b, "c"))
+            .throughput(criterion::Throughput::Bytes(WONDERLAND.len() as u32)));
+    c.bench("serve_chunked_before_gzip",
+            criterion::ParameterizedBenchmark::new("level",
+                                                   |b, p| serve(b, &format!("b{}", p)),
+                                                   0..=9)
+            .throughput(|_| criterion::Throughput::Bytes(WONDERLAND.len() as u32)));
+    c.bench("serve_chunked_after_gzip",
+            criterion::ParameterizedBenchmark::new("level",
+                                                   |b, p| serve(b, &format!("a{}", p)),
+                                                   0..=9)
+            .throughput(|_| criterion::Throughput::Bytes(WONDERLAND.len() as u32)));
 }
 
-#[bench]
-fn serve_copied_entity(b: &mut test::Bencher) {
-    serve(b, "c");
+criterion_group!{
+    name = benches;
+    config = Criterion::default().sample_size(10);
+    targets = criterion_benchmark
 }
-
-#[bench]
-fn serve_chunked_after_gzip_level_0(b: &mut test::Bencher) {
-    serve(b, "a0");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_0(b: &mut test::Bencher) {
-    serve(b, "b0");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_1(b: &mut test::Bencher) {
-    serve(b, "b1");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_2(b: &mut test::Bencher) {
-    serve(b, "b2");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_3(b: &mut test::Bencher) {
-    serve(b, "b3");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_4(b: &mut test::Bencher) {
-    serve(b, "b4");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_5(b: &mut test::Bencher) {
-    serve(b, "b5");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_6(b: &mut test::Bencher) {
-    serve(b, "b6");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_7(b: &mut test::Bencher) {
-    serve(b, "b7");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_8(b: &mut test::Bencher) {
-    serve(b, "b8");
-}
-
-#[bench]
-fn serve_chunked_before_gzip_level_9(b: &mut test::Bencher) {
-    serve(b, "b9");
-}
+criterion_main!(benches);
