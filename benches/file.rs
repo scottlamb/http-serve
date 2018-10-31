@@ -85,7 +85,7 @@ fn serve_full_entity(b: &mut test::Bencher, kib: usize) {
         let mut resp = client.get(&*SERVER).send().unwrap();
         buf.clear();
         let size = resp.read_to_end(&mut buf).unwrap();
-        assert_eq!(reqwest::StatusCode::Ok, resp.status());
+        assert_eq!(http::StatusCode::OK, resp.status());
         assert_eq!(1024 * kib, size);
     };
     run(); // warm.
@@ -111,14 +111,12 @@ fn serve_last_byte_1mib(b: &mut test::Bencher) {
     let mut run = || {
         let mut resp = client
             .get(&*SERVER)
-            .header(reqwest::header::Range::Bytes(vec![
-                reqwest::header::ByteRangeSpec::Last(1),
-            ]))
+            .header("Range", "bytes=-1")
             .send()
             .unwrap();
         buf.clear();
         let size = resp.read_to_end(&mut buf).unwrap();
-        assert_eq!(reqwest::StatusCode::PartialContent, resp.status());
+        assert_eq!(http::StatusCode::PARTIAL_CONTENT, resp.status());
         assert_eq!(1, size);
     };
     run(); // warm.

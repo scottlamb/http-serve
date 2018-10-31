@@ -139,7 +139,7 @@ fn serve(b: &mut test::Bencher, path: &str) {
             .unwrap();
         buf.clear();
         let size = resp.read_to_end(&mut buf).unwrap();
-        assert_eq!(reqwest::StatusCode::Ok, resp.status());
+        assert_eq!(http::StatusCode::OK, resp.status());
         assert_eq!(size, WONDERLAND.len());
     };
     run(); // warm.
