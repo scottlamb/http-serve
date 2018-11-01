@@ -1,10 +1,11 @@
 os:
-  - windows
   - linux
+  - windows
 language: rust
 rust:
   - stable
   - beta
+  - 1.26.0
 script:
   - cargo build --all
   - cargo test --all
