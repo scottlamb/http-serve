@@ -147,25 +147,29 @@ fn serve(b: &mut criterion::Bencher, path: &str) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench("serve",
-            criterion::Benchmark::new("static", |b| serve(b, "s"))
-            .throughput(criterion::Throughput::Bytes(WONDERLAND.len() as u32)));
-    c.bench("serve",
-            criterion::Benchmark::new("copied", |b| serve(b, "c"))
-            .throughput(criterion::Throughput::Bytes(WONDERLAND.len() as u32)));
-    c.bench("serve_chunked_before_gzip",
-            criterion::ParameterizedBenchmark::new("level",
-                                                   |b, p| serve(b, &format!("b{}", p)),
-                                                   0..=9)
-            .throughput(|_| criterion::Throughput::Bytes(WONDERLAND.len() as u32)));
-    c.bench("serve_chunked_after_gzip",
-            criterion::ParameterizedBenchmark::new("level",
-                                                   |b, p| serve(b, &format!("a{}", p)),
-                                                   0..=9)
-            .throughput(|_| criterion::Throughput::Bytes(WONDERLAND.len() as u32)));
+    c.bench(
+        "serve",
+        criterion::Benchmark::new("static", |b| serve(b, "s"))
+            .throughput(criterion::Throughput::Bytes(WONDERLAND.len() as u32)),
+    );
+    c.bench(
+        "serve",
+        criterion::Benchmark::new("copied", |b| serve(b, "c"))
+            .throughput(criterion::Throughput::Bytes(WONDERLAND.len() as u32)),
+    );
+    c.bench(
+        "serve_chunked_before_gzip",
+        criterion::ParameterizedBenchmark::new("level", |b, p| serve(b, &format!("b{}", p)), 0..=9)
+            .throughput(|_| criterion::Throughput::Bytes(WONDERLAND.len() as u32)),
+    );
+    c.bench(
+        "serve_chunked_after_gzip",
+        criterion::ParameterizedBenchmark::new("level", |b, p| serve(b, &format!("a{}", p)), 0..=9)
+            .throughput(|_| criterion::Throughput::Bytes(WONDERLAND.len() as u32)),
+    );
 }
 
-criterion_group!{
+criterion_group! {
     name = benches;
     config = Criterion::default().sample_size(10);
     targets = criterion_benchmark

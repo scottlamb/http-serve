@@ -6,8 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use futures::Stream;
 use futures::sync::mpsc;
+use futures::Stream;
 use std::io::{self, Write};
 use std::mem;
 
@@ -76,8 +76,7 @@ where
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let remaining = self.buf.capacity() - self.buf.len();
         let full = remaining <= buf.len();
-        let bytes =
-            if full { remaining } else { buf.len() };
+        let bytes = if full { remaining } else { buf.len() };
         self.buf.extend_from_slice(&buf[0..bytes]);
         if full {
             self.flush()?;
@@ -191,7 +190,8 @@ mod tests {
         w.truncate();
         w.abort(());
         drop(w);
-        let items = body.then(|r| -> Result<_, ()> { Ok(r) })
+        let items = body
+            .then(|r| -> Result<_, ()> { Ok(r) })
             .collect()
             .wait()
             .unwrap();

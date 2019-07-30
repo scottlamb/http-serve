@@ -7,8 +7,8 @@
 // except according to those terms.
 
 use bytes::Buf;
-use futures::{Future, Stream};
 use futures::future;
+use futures::{Future, Stream};
 use http::header::{HeaderMap, HeaderValue};
 use platform::{self, FileExt};
 use std::error::Error as StdError;
@@ -57,10 +57,7 @@ where
     /// block the tokio reactor thread on local disk I/O. Note that `File::open` and this
     /// constructor (specifically, its call to `fstat(2)`) may also block, so they typically
     /// should be wrapped in `tokio_threadpool::blocking` as well.
-    pub fn new(
-        file: ::std::fs::File,
-        headers: HeaderMap,
-    ) -> Result<Self, io::Error> {
+    pub fn new(file: ::std::fs::File, headers: HeaderMap) -> Result<Self, io::Error> {
         let info = platform::file_info(&file)?;
 
         Ok(ChunkedReadFile {
@@ -105,13 +102,18 @@ where
                         let mut chunk = Vec::with_capacity(chunk_size);
                         unsafe { chunk.set_len(chunk_size) };
                         let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
-                            Err(e) => return Err(Box::<StdError + Send + Sync + 'static>::from(e)
-                                                 .into()),
+                            Err(e) => {
+                                return Err(Box::<StdError + Send + Sync + 'static>::from(e).into())
+                            }
                             Ok(b) => b,
                         };
                         chunk.truncate(bytes_read);
-                        Ok((chunk.into(), (left.start + bytes_read as u64..left.end, inner)))
-                    }).map_err(|e| Box::<StdError + Send + Sync + 'static>::from(e).into())
+                        Ok((
+                            chunk.into(),
+                            (left.start + bytes_read as u64..left.end, inner),
+                        ))
+                    })
+                    .map_err(|e| Box::<StdError + Send + Sync + 'static>::from(e).into())
                 });
                 let f = f.and_then(|r| r);
                 let _: &Future<Item = (Self::Data, _), Error = Self::Error> = &f;
@@ -166,7 +168,7 @@ mod tests {
     use self::tempdir::TempDir;
     use super::ChunkedReadFile;
     use super::Entity;
-    use futures::{Future, Stream, future::lazy};
+    use futures::{future::lazy, Future, Stream};
     use http::header::HeaderMap;
     use hyper::Chunk;
     use std::fs::File;

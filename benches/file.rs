@@ -29,20 +29,19 @@ use std::io::{Read, Write};
 use std::sync::Mutex;
 use tempdir::TempDir;
 
-fn serve(req: Request<Body>)
-         -> impl Future<Item = Response<Body>,
-                        Error = Box<::std::error::Error + Sync + Send + 'static>> {
+fn serve(
+    req: Request<Body>,
+) -> impl Future<Item = Response<Body>, Error = Box<::std::error::Error + Sync + Send + 'static>> {
     futures::future::poll_fn(move || {
         tokio_threadpool::blocking(move || {
             let f = ::std::fs::File::open(&*PATH.lock().unwrap())?;
             let headers = http::header::HeaderMap::new();
             Ok(http_serve::ChunkedReadFile::new(f, headers)?)
         })
-    }).map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
-      .and_then(::futures::future::result)
-      .and_then(move |f| {
-          Ok(http_serve::serve(f, &req))
-      })
+    })
+    .map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
+    .and_then(::futures::future::result)
+    .and_then(move |f| Ok(http_serve::serve(f, &req)))
 }
 
 /// Returns the hostport of a newly created, never-destructed server.
@@ -112,12 +111,16 @@ fn serve_last_byte_1mib(b: &mut criterion::Bencher) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench("serve_full_entity",
-            criterion::Benchmark::new("1kib", |b| serve_full_entity(b, &1))
-            .throughput(criterion::Throughput::Bytes(1024)));
-    c.bench("serve_full_entity",
-            criterion::Benchmark::new("1mib", |b| serve_full_entity(b, &1024))
-            .throughput(criterion::Throughput::Bytes(1024 * 1024)));
+    c.bench(
+        "serve_full_entity",
+        criterion::Benchmark::new("1kib", |b| serve_full_entity(b, &1))
+            .throughput(criterion::Throughput::Bytes(1024)),
+    );
+    c.bench(
+        "serve_full_entity",
+        criterion::Benchmark::new("1mib", |b| serve_full_entity(b, &1024))
+            .throughput(criterion::Throughput::Bytes(1024 * 1024)),
+    );
     c.bench_function("serve_last_byte_1mib", serve_last_byte_1mib);
 }
 

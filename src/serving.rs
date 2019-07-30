@@ -53,9 +53,7 @@ fn parse_modified_hdrs(
     Ok((precondition_failed, not_modified))
 }
 
-fn static_body<E: Entity>(
-    s: &'static str,
-) -> Box<Stream<Item = E::Data, Error = E::Error> + Send> {
+fn static_body<E: Entity>(s: &'static str) -> Box<Stream<Item = E::Data, Error = E::Error> + Send> {
     Box::new(stream::once(Ok(s.as_bytes().into())))
 }
 
@@ -146,7 +144,8 @@ pub fn serve<
 
     if precondition_failed {
         res.status(StatusCode::PRECONDITION_FAILED);
-        return res.body(static_body::<E>("Precondition failed").into())
+        return res
+            .body(static_body::<E>("Precondition failed").into())
             .unwrap();
     }
 
@@ -247,7 +246,8 @@ fn send_multipart<
         each_part_headers.reserve(
             h.iter()
                 .map(|(k, v)| k.as_str().len() + v.as_bytes().len() + 4)
-                .sum::<usize>() + 2,
+                .sum::<usize>()
+                + 2,
         );
         for (k, v) in &h {
             each_part_headers.extend_from_slice(k.as_str().as_bytes());
@@ -267,7 +267,8 @@ fn send_multipart<
             r.start,
             r.end - 1,
             len
-        ).unwrap();
+        )
+        .unwrap();
         buf.extend_from_slice(&each_part_headers);
         body_len += buf.len() as u64 + r.end - r.start;
         part_headers.push(buf);

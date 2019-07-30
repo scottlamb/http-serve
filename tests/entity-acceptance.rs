@@ -127,11 +127,7 @@ fn serve_without_etag() {
     assert_eq!(BODY, &buf[..]);
 
     // If-Match any should still send the full body.
-    let mut resp = client
-        .get(&url)
-        .header("If-Match", "*")
-        .send()
-        .unwrap();
+    let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
     assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
@@ -191,8 +187,10 @@ fn serve_without_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE).unwrap(),
-               &format!("bytes 1-3/{}", BODY.len()));
+    assert_eq!(
+        resp.headers().get(header::CONTENT_RANGE).unwrap(),
+        &format!("bytes 1-3/{}", BODY.len())
+    );
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"123", &buf[..]);
@@ -205,8 +203,10 @@ fn serve_without_etag() {
         .unwrap();
     assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(),
-               &"multipart/byteranges; boundary=B");
+    assert_eq!(
+        resp.headers().get(header::CONTENT_TYPE).unwrap(),
+        &"multipart/byteranges; boundary=B"
+    );
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(
@@ -245,8 +245,10 @@ fn serve_without_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::RANGE_NOT_SATISFIABLE, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE).unwrap(),
-               &format!("bytes */{}", BODY.len()));
+    assert_eq!(
+        resp.headers().get(header::CONTENT_RANGE).unwrap(),
+        &format!("bytes */{}", BODY.len())
+    );
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"", &buf[..]);
@@ -301,11 +303,7 @@ fn serve_with_strong_etag() {
     let url = format!("{}/strong", *SERVER);
 
     // If-Match any should still send the full body.
-    let mut resp = client
-        .get(&url)
-        .header("If-Match", "*")
-        .send()
-        .unwrap();
+    let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
     assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
@@ -367,8 +365,10 @@ fn serve_with_strong_etag() {
         .unwrap();
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
     assert_eq!(None, resp.headers().get(header::CONTENT_TYPE));
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE).unwrap(),
-               &format!("bytes 1-3/{}", BODY.len()));
+    assert_eq!(
+        resp.headers().get(header::CONTENT_RANGE).unwrap(),
+        &format!("bytes 1-3/{}", BODY.len())
+    );
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"123", &buf[..]);
@@ -396,11 +396,7 @@ fn serve_with_weak_etag() {
     let url = format!("{}/weak", *SERVER);
 
     // If-Match any should still send the full body.
-    let mut resp = client
-        .get(&url)
-        .header("If-Match", "*")
-        .send()
-        .unwrap();
+    let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
     assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);

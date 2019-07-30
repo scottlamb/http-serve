@@ -119,9 +119,10 @@ fn abort(path: &'static str, auto_gzip: bool) {
     assert_eq!(b"1234", &buf);
 
     cmds.unbounded_send(Cmd::Abort(Box::new(io::Error::new(
-        io::ErrorKind::PermissionDenied,  // note: not related to error kind below.
+        io::ErrorKind::PermissionDenied, // note: not related to error kind below.
         "foo",
-    )))).unwrap();
+    ))))
+    .unwrap();
     assert_eq!(
         io::ErrorKind::Other,
         resp.read(&mut buf).unwrap_err().kind()
@@ -150,5 +151,8 @@ fn manual_gzip() {
     let mut buf = Vec::new();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"\x1f\x8b", &buf[..2]); // gzip magic number.
-    assert_eq!(resp.headers().get(header::CONTENT_ENCODING).unwrap(), "gzip");
+    assert_eq!(
+        resp.headers().get(header::CONTENT_ENCODING).unwrap(),
+        "gzip"
+    );
 }

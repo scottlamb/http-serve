@@ -38,20 +38,20 @@ struct Context {
     path: ::std::ffi::OsString,
 }
 
-fn serve(ctx: &'static Context, req: Request<Body>)
-    -> impl Future<Item = Response<Body>,
-                   Error = Box<::std::error::Error + Send + Sync + 'static>> {
+fn serve(
+    ctx: &'static Context,
+    req: Request<Body>,
+) -> impl Future<Item = Response<Body>, Error = Box<::std::error::Error + Send + Sync + 'static>> {
     futures::future::poll_fn(move || {
         tokio_threadpool::blocking(move || {
             let f = ::std::fs::File::open(&ctx.path)?;
             let headers = http::header::HeaderMap::new();
             Ok(ChunkedReadFile::new(f, headers)?)
         })
-    }).map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
-      .and_then(::futures::future::result)
-      .and_then(move |f| {
-          Ok(http_serve::serve(f, &req))
-      })
+    })
+    .map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
+    .and_then(::futures::future::result)
+    .and_then(move |f| Ok(http_serve::serve(f, &req)))
 }
 
 fn main() {
@@ -62,9 +62,7 @@ fn main() {
     }
     let path = args.nth(1).unwrap();
 
-    let ctx = Box::new(Context {
-        path: path,
-    }).leak();
+    let ctx = Box::new(Context { path: path }).leak();
 
     env_logger::init();
     let addr = "127.0.0.1:1337".parse().unwrap();
