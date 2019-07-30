@@ -163,9 +163,8 @@ where
 
 #[cfg(test)]
 mod tests {
-    extern crate tempdir;
+    extern crate tempfile;
 
-    use self::tempdir::TempDir;
     use super::ChunkedReadFile;
     use super::Entity;
     use futures::{future::lazy, Future, Stream};
@@ -181,7 +180,7 @@ mod tests {
     fn basic() {
         let pool = ThreadPool::new();
         pool.spawn(lazy(|| {
-            let tmp = TempDir::new("http-file").unwrap();
+            let tmp = tempfile::tempdir().unwrap();
             let p = tmp.path().join("f");
             let mut f = File::create(&p).unwrap();
             f.write_all(b"asdf").unwrap();

@@ -16,7 +16,7 @@ extern crate hyper;
 extern crate lazy_static;
 extern crate mime;
 extern crate reqwest;
-extern crate tempdir;
+extern crate tempfile;
 extern crate tokio;
 
 use criterion::Criterion;
@@ -27,7 +27,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::Mutex;
-use tempdir::TempDir;
+use tempfile::TempDir;
 
 fn serve(
     req: Request<Body>,
@@ -66,7 +66,7 @@ lazy_static! {
 /// Sets up the server to serve a 1 MiB file, until the returned `TempDir` goes out of scope and the
 /// file is deleted.
 fn setup(kib: usize) -> TempDir {
-    let tmpdir = tempdir::TempDir::new("http-file-bench").unwrap();
+    let tmpdir = tempfile::tempdir().unwrap();
     let tmppath = tmpdir.path().join("f");
     {
         let p = &mut *PATH.lock().unwrap();
