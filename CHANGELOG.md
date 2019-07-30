@@ -5,6 +5,7 @@
   from `http_serve::ChunkedReadFile` rather than hand off to a
   [futures-cpupool](https://crates.io/crates/futures-cpupool). This simplifies
   the `ChunkedReadFile` interface.
+* BREAKING CHANGE: bump minimum Rust version to 1.34.0.
 * Convert benchmarks to [criterion](https://crates.io/crates/criterion)
   to support running with stable Rust.
 
