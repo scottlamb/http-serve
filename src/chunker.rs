@@ -39,12 +39,14 @@ where
     D: From<Vec<u8>> + Send + 'static,
     E: Send + 'static,
 {
-    pub(crate) fn with_chunk_size(cap: usize) -> (Self, Box<Stream<Item = D, Error = E> + Send>) {
+    pub(crate) fn with_chunk_size(
+        cap: usize,
+    ) -> (Self, Box<dyn Stream<Item = D, Error = E> + Send>) {
         assert!(cap > 0);
         let (snd, rcv) = mpsc::unbounded();
         let body = Box::new(
             rcv.map_err(|()| unreachable!())
-                .and_then(::futures::future::result),
+                .and_then(futures::future::result),
         );
         (
             BodyWriter {

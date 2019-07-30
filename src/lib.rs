@@ -63,20 +63,6 @@
 //! when dropped. In these cases, the caller can supply an alternate implementation of the
 //! `hyper::Payload` trait which uses a different `Data` type than `hyper::Chunk`.
 
-extern crate bytes;
-extern crate flate2;
-extern crate futures;
-extern crate http;
-extern crate httpdate;
-extern crate hyper;
-extern crate mime;
-extern crate smallvec;
-extern crate time;
-extern crate tokio_threadpool;
-extern crate unicase;
-#[cfg(windows)]
-extern crate winapi;
-
 use bytes::Buf;
 use futures::Stream;
 use http::header::{self, HeaderMap, HeaderValue};
@@ -89,11 +75,11 @@ use std::time::SystemTime;
 ///    * The data are ASCII.
 macro_rules! fmt_ascii_val {
     ($max_len:expr, $fmt:expr, $($arg:tt)+) => {{
-        let mut buf = ::bytes::BytesMut::with_capacity($max_len);
+        let mut buf = bytes::BytesMut::with_capacity($max_len);
         use std::fmt::Write;
         write!(buf, $fmt, $($arg)*).expect("fmt_val fits within provided max len");
         unsafe {
-            ::http::header::HeaderValue::from_shared_unchecked(buf.freeze())
+            http::header::HeaderValue::from_shared_unchecked(buf.freeze())
         }
     }}
 }
@@ -106,9 +92,9 @@ mod platform;
 mod range;
 mod serving;
 
-pub use file::ChunkedReadFile;
-pub use gzip::BodyWriter;
-pub use serving::serve;
+pub use crate::file::ChunkedReadFile;
+pub use crate::gzip::BodyWriter;
+pub use crate::serving::serve;
 
 /// A reusable, read-only, byte-rangeable HTTP entity for GET and HEAD serving.
 /// Must return exactly the same data on every call.
@@ -117,7 +103,7 @@ pub trait Entity: 'static + Send {
 
     /// The type of a data chunk.
     ///
-    /// Commonly `::hyper::Chunk` but may be something more exotic.
+    /// Commonly `hyper::Chunk` but may be something more exotic.
     type Data: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>;
 
     /// Returns the length of the entity's body in bytes.
@@ -132,7 +118,7 @@ pub trait Entity: 'static + Send {
     fn get_range(
         &self,
         range: Range<u64>,
-    ) -> Box<Stream<Item = Self::Data, Error = Self::Error> + Send>;
+    ) -> Box<dyn Stream<Item = Self::Data, Error = Self::Error> + Send>;
 
     /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
     /// In particular, these headers are the "other representation header fields" described by [RFC
@@ -141,7 +127,7 @@ pub trait Entity: 'static + Send {
     ///
     /// This function will be called only when that section says that headers such as
     /// `Content-Type` should be included in the response.
-    fn add_headers(&self, &mut HeaderMap);
+    fn add_headers(&self, _: &mut HeaderMap);
 
     /// Returns an etag for this entity, if available.
     /// Implementations are encouraged to provide a strong etag. [RFC 7232 section
@@ -261,7 +247,7 @@ impl StreamingBodyBuilder {
     where
         D: From<Vec<u8>> + Send,
         E: Send,
-        P: From<Box<Stream<Item = D, Error = E> + Send>>,
+        P: From<Box<dyn Stream<Item = D, Error = E> + Send>>,
     {
         let (w, stream) = chunker::BodyWriter::with_chunk_size(self.chunk_size);
         let mut resp = http::Response::new(stream.into());

@@ -7,7 +7,8 @@
 // except according to those terms.
 
 use super::Entity;
-use etag;
+use crate::etag;
+use crate::range;
 use futures::future;
 use futures::stream;
 use futures::{self, Stream};
@@ -15,7 +16,6 @@ use http::header::{self, HeaderMap, HeaderValue};
 use http::{self, Method, Request, Response, StatusCode};
 use httpdate::{fmt_http_date, parse_http_date};
 use hyper::body::Payload;
-use range;
 use smallvec::SmallVec;
 use std::io::Write;
 use std::ops::Range;
@@ -53,11 +53,13 @@ fn parse_modified_hdrs(
     Ok((precondition_failed, not_modified))
 }
 
-fn static_body<E: Entity>(s: &'static str) -> Box<Stream<Item = E::Data, Error = E::Error> + Send> {
+fn static_body<E: Entity>(
+    s: &'static str,
+) -> Box<dyn Stream<Item = E::Data, Error = E::Error> + Send> {
     Box::new(stream::once(Ok(s.as_bytes().into())))
 }
 
-fn empty_body<E: Entity>() -> Box<Stream<Item = E::Data, Error = E::Error> + Send> {
+fn empty_body<E: Entity>() -> Box<dyn Stream<Item = E::Data, Error = E::Error> + Send> {
     Box::new(stream::empty())
 }
 
@@ -67,7 +69,7 @@ fn empty_body<E: Entity>() -> Box<Stream<Item = E::Data, Error = E::Error> + Sen
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
 pub fn serve<
     E: Entity,
-    P: Payload + From<Box<Stream<Item = E::Data, Error = E::Error> + Send>>,
+    P: Payload + From<Box<dyn Stream<Item = E::Data, Error = E::Error> + Send>>,
     PI,
 >(
     e: E,
@@ -135,7 +137,7 @@ pub fn serve<
         // let hyper set it.
         let d = SystemTime::now();
         res.header(header::DATE, &*fmt_http_date(d));
-        let clamped_m = ::std::cmp::min(m, d);
+        let clamped_m = std::cmp::min(m, d);
         res.header(header::LAST_MODIFIED, &*fmt_http_date(clamped_m));
     }
     if let Some(e) = etag {
@@ -218,7 +220,7 @@ where
 {
     type Item = C;
     type Error = B::Error;
-    fn poll(&mut self) -> ::futures::Poll<Option<C>, Self::Error> {
+    fn poll(&mut self) -> futures::Poll<Option<C>, Self::Error> {
         match *self {
             InnerBody::Once(ref mut o) => Ok(futures::Async::Ready(o.take())),
             InnerBody::B(ref mut b) => b.poll(),
@@ -228,7 +230,7 @@ where
 
 fn send_multipart<
     E: Entity,
-    P: Payload + From<Box<Stream<Item = E::Data, Error = E::Error> + Send>>,
+    P: Payload + From<Box<dyn Stream<Item = E::Data, Error = E::Error> + Send>>,
     PI,
 >(
     e: E,
@@ -292,7 +294,7 @@ fn send_multipart<
 
     // Create bodies, a stream of E::Stream values as follows: each part's header and body
     // (the latter produced lazily), then the overall trailer.
-    let bodies = ::futures::stream::unfold(0, move |state| {
+    let bodies = futures::stream::unfold(0, move |state| {
         let i = state >> 1;
         let odd = (state & 1) == 1;
         let body = if i == rs.len() && odd {
@@ -302,12 +304,12 @@ fn send_multipart<
         } else if odd {
             InnerBody::B(e.get_range(rs[i].clone()))
         } else {
-            let v = ::std::mem::replace(&mut part_headers[i], Vec::new());
+            let v = std::mem::replace(&mut part_headers[i], Vec::new());
             InnerBody::Once(Some(v.into()))
         };
         Some(future::ok::<_, E::Error>((body, state + 1)))
     });
 
-    let body: Box<Stream<Item = E::Data, Error = E::Error> + Send> = Box::new(bodies.flatten());
+    let body: Box<dyn Stream<Item = E::Data, Error = E::Error> + Send> = Box::new(bodies.flatten());
     res.body(body.into()).unwrap()
 }

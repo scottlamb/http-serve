@@ -35,30 +35,31 @@ use hyper::Body;
 use leak::Leak;
 
 struct Context {
-    path: ::std::ffi::OsString,
+    path: std::ffi::OsString,
 }
 
 fn serve(
     ctx: &'static Context,
     req: Request<Body>,
-) -> impl Future<Item = Response<Body>, Error = Box<::std::error::Error + Send + Sync + 'static>> {
+) -> impl Future<Item = Response<Body>, Error = Box<dyn std::error::Error + Send + Sync + 'static>>
+{
     futures::future::poll_fn(move || {
         tokio_threadpool::blocking(move || {
-            let f = ::std::fs::File::open(&ctx.path)?;
+            let f = std::fs::File::open(&ctx.path)?;
             let headers = http::header::HeaderMap::new();
             Ok(ChunkedReadFile::new(f, headers)?)
         })
     })
     .map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
-    .and_then(::futures::future::result)
+    .and_then(futures::future::result)
     .and_then(move |f| Ok(http_serve::serve(f, &req)))
 }
 
 fn main() {
-    let mut args = ::std::env::args_os();
+    let mut args = std::env::args_os();
     if args.len() != 2 {
         eprintln!("Expected serve [FILENAME]");
-        ::std::process::exit(1);
+        std::process::exit(1);
     }
     let path = args.nth(1).unwrap();
 

@@ -14,7 +14,7 @@ pub trait FileExt {
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize>;
 }
 
-impl FileExt for ::std::fs::File {
+impl FileExt for std::fs::File {
     #[cfg(unix)]
     fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
         use std::os::unix::fs::FileExt;
@@ -44,7 +44,7 @@ pub struct FileInfo {
 ///
 /// `FILETIME` is the number of 100 ns ticks since Jan 1 1601.
 /// Unix time is the number of seconds since Jan 1 1970.
-fn filetime_to_systemtime(time: ::winapi::shared::minwindef::FILETIME) -> SystemTime {
+fn filetime_to_systemtime(time: winapi::shared::minwindef::FILETIME) -> SystemTime {
     use std::time::{Duration, UNIX_EPOCH};
 
     let ticks = (time.dwHighDateTime as u64) << 32 | time.dwLowDateTime as u64;

@@ -42,7 +42,7 @@ fn serve(req: http::Request<hyper::Body>) -> http::Response<hyper::Body> {
 enum Cmd {
     WriteAll(&'static [u8]),
     Flush,
-    Abort(Box<::std::error::Error + Send + Sync>),
+    Abort(Box<dyn std::error::Error + Send + Sync>),
 }
 
 struct Server {
@@ -50,8 +50,8 @@ struct Server {
 }
 
 fn new_server() -> Server {
-    let (server_tx, server_rx) = ::std::sync::mpsc::channel();
-    ::std::thread::spawn(move || {
+    let (server_tx, server_rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
         let srv = hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn_ok(serve));
         let addr = srv.local_addr();

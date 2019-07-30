@@ -6,11 +6,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use crate::platform::{self, FileExt};
 use bytes::Buf;
 use futures::future;
 use futures::{Future, Stream};
 use http::header::{HeaderMap, HeaderValue};
-use platform::{self, FileExt};
 use std::error::Error as StdError;
 use std::io;
 use std::ops::Range;
@@ -18,7 +18,7 @@ use std::sync::Arc;
 use std::time::{self, SystemTime};
 use tokio_threadpool::blocking;
 
-use Entity;
+use crate::Entity;
 
 // This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
 // a tradeoff between memory usage and thread handoffs.
@@ -32,24 +32,27 @@ static CHUNK_SIZE: u64 = 65_536;
 #[derive(Clone)]
 pub struct ChunkedReadFile<
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Into<Box<StdError + Send + Sync>> + From<Box<StdError + Send + Sync>>,
+    E: 'static + Send + Into<Box<dyn StdError + Send + Sync>> + From<Box<dyn StdError + Send + Sync>>,
 > {
     inner: Arc<ChunkedReadFileInner>,
-    phantom: ::std::marker::PhantomData<(D, E)>,
+    phantom: std::marker::PhantomData<(D, E)>,
 }
 
 struct ChunkedReadFileInner {
     len: u64,
     inode: u64,
     mtime: SystemTime,
-    f: ::std::fs::File,
+    f: std::fs::File,
     headers: HeaderMap,
 }
 
 impl<D, E> ChunkedReadFile<D, E>
 where
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Into<Box<StdError + Send + Sync>> + From<Box<StdError + Send + Sync>>,
+    E: 'static
+        + Send
+        + Into<Box<dyn StdError + Send + Sync>>
+        + From<Box<dyn StdError + Send + Sync>>,
 {
     /// Creates a new ChunkedReadFile.
     ///
@@ -57,7 +60,7 @@ where
     /// block the tokio reactor thread on local disk I/O. Note that `File::open` and this
     /// constructor (specifically, its call to `fstat(2)`) may also block, so they typically
     /// should be wrapped in `tokio_threadpool::blocking` as well.
-    pub fn new(file: ::std::fs::File, headers: HeaderMap) -> Result<Self, io::Error> {
+    pub fn new(file: std::fs::File, headers: HeaderMap) -> Result<Self, io::Error> {
         let info = platform::file_info(&file)?;
 
         Ok(ChunkedReadFile {
@@ -68,7 +71,7 @@ where
                 headers,
                 f: file,
             }),
-            phantom: ::std::marker::PhantomData,
+            phantom: std::marker::PhantomData,
         })
     }
 }
@@ -76,7 +79,10 @@ where
 impl<D, E> Entity for ChunkedReadFile<D, E>
 where
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Into<Box<StdError + Send + Sync>> + From<Box<StdError + Send + Sync>>,
+    E: 'static
+        + Send
+        + Into<Box<dyn StdError + Send + Sync>>
+        + From<Box<dyn StdError + Send + Sync>>,
 {
     type Data = D;
     type Error = E;
@@ -88,13 +94,13 @@ where
     fn get_range(
         &self,
         range: Range<u64>,
-    ) -> Box<Stream<Item = Self::Data, Error = Self::Error> + Send> {
+    ) -> Box<dyn Stream<Item = Self::Data, Error = Self::Error> + Send> {
         let stream =
-            ::futures::stream::unfold((range, Arc::clone(&self.inner)), move |(left, inner)| {
+            futures::stream::unfold((range, Arc::clone(&self.inner)), move |(left, inner)| {
                 if left.start == left.end {
                     return None;
                 }
-                let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
+                let chunk_size = std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
                 let f = future::poll_fn(move || {
                     let left = left.clone();
                     let inner = inner.clone();
@@ -103,7 +109,9 @@ where
                         unsafe { chunk.set_len(chunk_size) };
                         let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
                             Err(e) => {
-                                return Err(Box::<StdError + Send + Sync + 'static>::from(e).into())
+                                return Err(
+                                    Box::<dyn StdError + Send + Sync + 'static>::from(e).into()
+                                )
                             }
                             Ok(b) => b,
                         };
@@ -113,13 +121,13 @@ where
                             (left.start + bytes_read as u64..left.end, inner),
                         ))
                     })
-                    .map_err(|e| Box::<StdError + Send + Sync + 'static>::from(e).into())
+                    .map_err(|e| Box::<dyn StdError + Send + Sync + 'static>::from(e).into())
                 });
                 let f = f.and_then(|r| r);
-                let _: &Future<Item = (Self::Data, _), Error = Self::Error> = &f;
+                let _: &dyn Future<Item = (Self::Data, _), Error = Self::Error> = &f;
                 Some(f)
             });
-        let _: &Stream<Item = Self::Data, Error = Self::Error> = &stream;
+        let _: &dyn Stream<Item = Self::Data, Error = Self::Error> = &stream;
         Box::new(stream)
     }
 
@@ -174,7 +182,7 @@ mod tests {
     use std::io::Write;
     use tokio_threadpool::ThreadPool;
 
-    type CRF = ChunkedReadFile<Chunk, Box<::std::error::Error + Sync + Send>>;
+    type CRF = ChunkedReadFile<Chunk, Box<dyn std::error::Error + Sync + Send>>;
 
     #[test]
     fn basic() {

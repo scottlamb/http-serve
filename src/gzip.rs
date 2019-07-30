@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use chunker;
+use crate::chunker;
 use std::io::{self, Write};
 use std::mem;
 
@@ -37,7 +37,7 @@ where
     E: Send + 'static,
 {
     Raw(chunker::BodyWriter<D, E>),
-    Gzipped(::flate2::write::GzEncoder<chunker::BodyWriter<D, E>>),
+    Gzipped(flate2::write::GzEncoder<chunker::BodyWriter<D, E>>),
 
     /// No more data should be sent. `abort()` or `drop()` has been called, or a previous call
     /// discovered that the receiver has been dropped.
@@ -53,8 +53,8 @@ where
         BodyWriter(Inner::Raw(raw))
     }
 
-    pub(crate) fn gzipped(raw: chunker::BodyWriter<D, E>, level: ::flate2::Compression) -> Self {
-        BodyWriter(Inner::Gzipped(::flate2::GzBuilder::new().write(raw, level)))
+    pub(crate) fn gzipped(raw: chunker::BodyWriter<D, E>, level: flate2::Compression) -> Self {
+        BodyWriter(Inner::Gzipped(flate2::GzBuilder::new().write(raw, level)))
     }
 
     /// Causes the HTTP connection to be dropped abruptly.

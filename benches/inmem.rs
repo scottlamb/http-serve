@@ -41,7 +41,7 @@ struct BytesEntity(Bytes);
 
 impl http_serve::Entity for BytesEntity {
     type Data = hyper::Chunk;
-    type Error = Box<::std::error::Error + Send + Sync>;
+    type Error = Box<dyn std::error::Error + Send + Sync>;
 
     fn len(&self) -> u64 {
         self.0.len() as u64
@@ -109,8 +109,8 @@ fn serve_req(req: Request<Body>) -> Response<Body> {
 
 /// Returns the hostport of a newly-created, never-destructed server.
 fn new_server() -> String {
-    let (tx, rx) = ::std::sync::mpsc::channel();
-    ::std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
         let server =
             hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn_ok(serve_req));

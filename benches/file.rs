@@ -31,23 +31,24 @@ use tempfile::TempDir;
 
 fn serve(
     req: Request<Body>,
-) -> impl Future<Item = Response<Body>, Error = Box<::std::error::Error + Sync + Send + 'static>> {
+) -> impl Future<Item = Response<Body>, Error = Box<dyn std::error::Error + Sync + Send + 'static>>
+{
     futures::future::poll_fn(move || {
         tokio_threadpool::blocking(move || {
-            let f = ::std::fs::File::open(&*PATH.lock().unwrap())?;
+            let f = std::fs::File::open(&*PATH.lock().unwrap())?;
             let headers = http::header::HeaderMap::new();
             Ok(http_serve::ChunkedReadFile::new(f, headers)?)
         })
     })
     .map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
-    .and_then(::futures::future::result)
+    .and_then(futures::future::result)
     .and_then(move |f| Ok(http_serve::serve(f, &req)))
 }
 
 /// Returns the hostport of a newly created, never-destructed server.
 fn new_server() -> String {
-    let (tx, rx) = ::std::sync::mpsc::channel();
-    ::std::thread::spawn(move || {
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
         let server = hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn(serve));
         let addr = server.local_addr();
