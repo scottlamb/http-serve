@@ -9,7 +9,6 @@
 #[macro_use]
 extern crate criterion;
 extern crate futures;
-extern crate futures_cpupool;
 extern crate http;
 extern crate http_serve;
 extern crate hyper;
@@ -22,7 +21,6 @@ extern crate tokio;
 
 use criterion::Criterion;
 use futures::Future;
-use futures_cpupool::{CpuFuture, CpuPool};
 use http::{Request, Response};
 use hyper::Body;
 use std::ffi::OsString;
@@ -31,13 +29,20 @@ use std::io::{Read, Write};
 use std::sync::Mutex;
 use tempdir::TempDir;
 
-fn serve(req: Request<Body>) -> CpuFuture<Response<Body>, ::std::io::Error> {
-    POOL.spawn_fn(move || {
-        let f = File::open(&*PATH.lock().unwrap())?;
-        let headers = http::header::HeaderMap::new();
-        let f = http_serve::ChunkedReadFile::new(f, Some(POOL.clone()), headers)?;
-        Ok(http_serve::serve(f, &req))
-    })
+fn serve(req: Request<Body>)
+         -> impl Future<Item = Response<Body>,
+                        Error = Box<::std::error::Error + Sync + Send + 'static>> {
+    futures::future::poll_fn(move || {
+        tokio_threadpool::blocking(move || {
+            let f = ::std::fs::File::open(&*PATH.lock().unwrap())?;
+            let headers = http::header::HeaderMap::new();
+            Ok(http_serve::ChunkedReadFile::new(f, headers)?)
+        })
+    }).map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
+      .and_then(::futures::future::result)
+      .and_then(move |f| {
+          Ok(http_serve::serve(f, &req))
+      })
 }
 
 /// Returns the hostport of a newly created, never-destructed server.
@@ -56,7 +61,6 @@ fn new_server() -> String {
 
 lazy_static! {
     static ref PATH: Mutex<OsString> = { Mutex::new(OsString::new()) };
-    static ref POOL: CpuPool = { CpuPool::new(1) };
     static ref SERVER: String = { new_server() };
 }
 

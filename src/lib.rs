@@ -66,12 +66,14 @@
 extern crate bytes;
 extern crate flate2;
 extern crate futures;
-extern crate futures_cpupool;
 extern crate http;
 extern crate httpdate;
 extern crate hyper;
 extern crate mime;
 extern crate smallvec;
+extern crate time;
+extern crate tokio_threadpool;
+extern crate unicase;
 #[cfg(windows)]
 extern crate winapi;
 

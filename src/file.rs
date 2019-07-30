@@ -7,26 +7,32 @@
 // except according to those terms.
 
 use bytes::Buf;
-use futures::{Sink, Stream};
-use futures_cpupool::CpuPool;
+use futures::{Future, Stream};
+use futures::future;
 use http::header::{HeaderMap, HeaderValue};
 use platform::{self, FileExt};
+use std::error::Error as StdError;
 use std::io;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{self, SystemTime};
+use tokio_threadpool::blocking;
+
 use Entity;
 
 // This stream breaks apart the file into chunks of at most CHUNK_SIZE. This size is
 // a tradeoff between memory usage and thread handoffs.
 static CHUNK_SIZE: u64 = 65_536;
 
-/// A HTTP entity created from a `std::fs::File` which reads the file
-/// chunk-by-chunk on a `CpuPool`.
+/// A HTTP entity created from a `std::fs::File` which reads the file chunk-by-chunk within
+/// a `tokio_threadpool::blocking` closure.
+///
+/// Expects to be used from a tokio threadpool; `get_range` calls will fail with
+/// `tokio_threadpool::BlockingError` otherwise.
 #[derive(Clone)]
 pub struct ChunkedReadFile<
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Into<Box<::std::error::Error + Send + Sync>> + From<Box<::std::io::Error>>,
+    E: 'static + Send + Into<Box<StdError + Send + Sync>> + From<Box<StdError + Send + Sync>>,
 > {
     inner: Arc<ChunkedReadFileInner>,
     phantom: ::std::marker::PhantomData<(D, E)>,
@@ -37,24 +43,22 @@ struct ChunkedReadFileInner {
     inode: u64,
     mtime: SystemTime,
     f: ::std::fs::File,
-    pool: Option<CpuPool>,
     headers: HeaderMap,
 }
 
 impl<D, E> ChunkedReadFile<D, E>
 where
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Into<Box<::std::error::Error + Send + Sync>> + From<Box<::std::io::Error>>,
+    E: 'static + Send + Into<Box<StdError + Send + Sync>> + From<Box<StdError + Send + Sync>>,
 {
     /// Creates a new ChunkedReadFile.
     ///
-    /// `read(2)` calls will be performed on the supplied `pool` so that they don't block the
-    /// tokio reactor thread on local disk I/O. Note that `File::open` and this constructor
-    /// (specifically, its call to `fstat(2)`) may also block, so they typically shouldn't be
-    /// called on the tokio reactor either.
+    /// `read(2)` calls will be wrapped in `tokio_threadpool::blocking` calls so that they don't
+    /// block the tokio reactor thread on local disk I/O. Note that `File::open` and this
+    /// constructor (specifically, its call to `fstat(2)`) may also block, so they typically
+    /// should be wrapped in `tokio_threadpool::blocking` as well.
     pub fn new(
         file: ::std::fs::File,
-        pool: Option<CpuPool>,
         headers: HeaderMap,
     ) -> Result<Self, io::Error> {
         let info = platform::file_info(&file)?;
@@ -66,7 +70,6 @@ where
                 mtime: info.mtime,
                 headers,
                 f: file,
-                pool: pool,
             }),
             phantom: ::std::marker::PhantomData,
         })
@@ -76,7 +79,7 @@ where
 impl<D, E> Entity for ChunkedReadFile<D, E>
 where
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Into<Box<::std::error::Error + Send + Sync>> + From<Box<::std::io::Error>>,
+    E: 'static + Send + Into<Box<StdError + Send + Sync>> + From<Box<StdError + Send + Sync>>,
 {
     type Data = D;
     type Error = E;
@@ -95,31 +98,27 @@ where
                     return None;
                 }
                 let chunk_size = ::std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
-                let mut chunk = Vec::with_capacity(chunk_size);
-                unsafe { chunk.set_len(chunk_size) };
-                let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
-                    Err(e) => return Some(Err(Box::new(e).into())),
-                    Ok(b) => b,
-                };
-                chunk.truncate(bytes_read);
-                Some(Ok((
-                    chunk.into(),
-                    (left.start + bytes_read as u64..left.end, inner),
-                )))
+                let f = future::poll_fn(move || {
+                    let left = left.clone();
+                    let inner = inner.clone();
+                    blocking(move || {
+                        let mut chunk = Vec::with_capacity(chunk_size);
+                        unsafe { chunk.set_len(chunk_size) };
+                        let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
+                            Err(e) => return Err(Box::<StdError + Send + Sync + 'static>::from(e)
+                                                 .into()),
+                            Ok(b) => b,
+                        };
+                        chunk.truncate(bytes_read);
+                        Ok((chunk.into(), (left.start + bytes_read as u64..left.end, inner)))
+                    }).map_err(|e| Box::<StdError + Send + Sync + 'static>::from(e).into())
+                });
+                let f = f.and_then(|r| r);
+                let _: &Future<Item = (Self::Data, _), Error = Self::Error> = &f;
+                Some(f)
             });
-
-        let stream: Box<Stream<Item = D, Error = E> + Send> = match self.inner.pool {
-            Some(ref p) => {
-                let (snd, rcv) = ::futures::sync::mpsc::channel(0);
-                p.spawn(snd.send_all(stream.then(Ok))).forget();
-                Box::new(
-                    rcv.map_err(|()| unreachable!())
-                        .and_then(::futures::future::result),
-                )
-            }
-            None => Box::new(stream),
-        };
-        stream
+        let _: &Stream<Item = Self::Data, Error = Self::Error> = &stream;
+        Box::new(stream)
     }
 
     fn add_headers(&self, h: &mut HeaderMap) {
@@ -167,50 +166,46 @@ mod tests {
     use self::tempdir::TempDir;
     use super::ChunkedReadFile;
     use super::Entity;
-    use futures::{Future, Stream};
-    use futures_cpupool::CpuPool;
+    use futures::{Future, Stream, future::lazy};
     use http::header::HeaderMap;
     use hyper::Chunk;
     use std::fs::File;
     use std::io::Write;
+    use tokio_threadpool::ThreadPool;
 
     type CRF = ChunkedReadFile<Chunk, Box<::std::error::Error + Sync + Send>>;
 
-    fn basic_tests(pool: Option<CpuPool>) {
-        let tmp = TempDir::new("http-file").unwrap();
-        let p = tmp.path().join("f");
-        let mut f = File::create(&p).unwrap();
-        f.write_all(b"asdf").unwrap();
-
-        let crf = CRF::new(File::open(&p).unwrap(), pool.clone(), HeaderMap::new()).unwrap();
-        assert_eq!(4, crf.len());
-        let etag1 = crf.etag();
-
-        // Test returning part/all of the stream.
-        assert_eq!(
-            &crf.get_range(0..4).concat2().wait().unwrap().as_ref(),
-            b"asdf"
-        );
-        assert_eq!(
-            &crf.get_range(1..3).concat2().wait().unwrap().as_ref(),
-            b"sd"
-        );
-
-        // A ChunkedReadFile constructed from a modified file should have a different etag.
-        f.write_all(b"jkl;").unwrap();
-        let crf = CRF::new(File::open(&p).unwrap(), pool, HeaderMap::new()).unwrap();
-        assert_eq!(8, crf.len());
-        let etag2 = crf.etag();
-        assert_ne!(etag1, etag2);
-    }
-
     #[test]
-    fn with_pool() {
-        basic_tests(Some(CpuPool::new(1)));
-    }
+    fn basic() {
+        let pool = ThreadPool::new();
+        pool.spawn(lazy(|| {
+            let tmp = TempDir::new("http-file").unwrap();
+            let p = tmp.path().join("f");
+            let mut f = File::create(&p).unwrap();
+            f.write_all(b"asdf").unwrap();
 
-    #[test]
-    fn without_pool() {
-        basic_tests(None);
+            let crf = CRF::new(File::open(&p).unwrap(), HeaderMap::new()).unwrap();
+            assert_eq!(4, crf.len());
+            let etag1 = crf.etag();
+
+            // Test returning part/all of the stream.
+            assert_eq!(
+                &crf.get_range(0..4).concat2().wait().unwrap().as_ref(),
+                b"asdf"
+            );
+            assert_eq!(
+                &crf.get_range(1..3).concat2().wait().unwrap().as_ref(),
+                b"sd"
+            );
+
+            // A ChunkedReadFile constructed from a modified file should have a different etag.
+            f.write_all(b"jkl;").unwrap();
+            let crf = CRF::new(File::open(&p).unwrap(), HeaderMap::new()).unwrap();
+            assert_eq!(8, crf.len());
+            let etag2 = crf.etag();
+            assert_ne!(etag1, etag2);
+            Ok(())
+        }));
+        pool.shutdown().wait().unwrap();
     }
 }

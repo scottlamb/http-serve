@@ -20,16 +20,15 @@
 
 extern crate env_logger;
 extern crate futures;
-extern crate futures_cpupool;
 extern crate http;
 extern crate http_serve;
 extern crate hyper;
 extern crate leak;
 extern crate mime;
 extern crate tokio;
+extern crate tokio_threadpool;
 
 use futures::Future;
-use futures_cpupool::{CpuFuture, CpuPool};
 use http::{Request, Response};
 use http_serve::ChunkedReadFile;
 use hyper::Body;
@@ -37,43 +36,34 @@ use leak::Leak;
 
 struct Context {
     path: ::std::ffi::OsString,
-    pool: CpuPool,
 }
 
-fn try_serve(
-    ctx: &'static Context,
-    req: Request<Body>,
-) -> Result<Response<Body>, ::std::io::Error> {
-    let f = ::std::fs::File::open(&ctx.path)?;
-    let headers = http::header::HeaderMap::new();
-    let f = ChunkedReadFile::new(f, Some(ctx.pool.clone()), headers)?;
-    Ok(http_serve::serve(f, &req))
-}
-
-fn serve(ctx: &'static Context, req: Request<Body>) -> CpuFuture<Response<Body>, ::std::io::Error> {
-    ctx.pool.spawn_fn(move || {
-        Ok(match try_serve(ctx, req) {
-            Ok(r) => r,
-            Err(e) => http::Response::builder()
-                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                .body(format!("I/O error: {}", e).into())
-                .unwrap(),
+fn serve(ctx: &'static Context, req: Request<Body>)
+    -> impl Future<Item = Response<Body>,
+                   Error = Box<::std::error::Error + Send + Sync + 'static>> {
+    futures::future::poll_fn(move || {
+        tokio_threadpool::blocking(move || {
+            let f = ::std::fs::File::open(&ctx.path)?;
+            let headers = http::header::HeaderMap::new();
+            Ok(ChunkedReadFile::new(f, headers)?)
         })
-    })
+    }).map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
+      .and_then(::futures::future::result)
+      .and_then(move |f| {
+          Ok(http_serve::serve(f, &req))
+      })
 }
 
 fn main() {
     let mut args = ::std::env::args_os();
     if args.len() != 2 {
-        use std::io::Write;
-        writeln!(&mut std::io::stderr(), "Expected serve [FILENAME]").unwrap();
+        eprintln!("Expected serve [FILENAME]");
         ::std::process::exit(1);
     }
     let path = args.nth(1).unwrap();
 
     let ctx = Box::new(Context {
         path: path,
-        pool: CpuPool::new(1),
     }).leak();
 
     env_logger::init();
