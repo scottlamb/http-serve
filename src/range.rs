@@ -46,7 +46,7 @@ pub(crate) fn parse(range: Option<&HeaderValue>, len: u64) -> ResolvedRanges {
     let mut ranges: SmallVec<[Range<u64>; 1]> = SmallVec::new();
     for r in range[6..].split(',') {
         // Trim OWS = *( SP / HTAB )
-        let r = r.trim_left_matches(|c| c == ' ' || c == '\t');
+        let r = r.trim_start_matches(|c| c == ' ' || c == '\t');
 
         // Parse one of the following.
         // byte-range-spec = first-byte-pos "-" [ last-byte-pos ]
