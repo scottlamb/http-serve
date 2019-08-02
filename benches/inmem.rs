@@ -12,6 +12,7 @@
 #[macro_use]
 extern crate criterion;
 extern crate bytes;
+extern crate env_logger;
 extern crate futures;
 extern crate http;
 extern crate http_serve;
@@ -19,21 +20,23 @@ extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
 extern crate mime;
-extern crate reqwest;
+extern crate socket2;
 extern crate tokio;
 
 use bytes::{Bytes, BytesMut};
-use criterion::Criterion;
+use criterion::{Benchmark, Criterion, ParameterizedBenchmark, Throughput};
 use futures::{future, stream};
 use futures::{Future, Stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
 use http_serve::streaming_body;
 use hyper::Body;
+use std::convert::TryInto;
 use std::io::{Read, Write};
+use std::net::SocketAddr;
 use std::ops::Range;
 use std::str::FromStr;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 
 static WONDERLAND: &[u8] = include_bytes!("wonderland.txt");
 
@@ -84,8 +87,10 @@ fn serve_req(req: Request<Body>) -> Response<Body> {
         }
         b'b' => {
             // chunked, data written before returning the Response.
-            let l = u32::from_str(&path[2..]).unwrap();
-            let (resp, w) = streaming_body(&req).with_gzip_level(l).build();
+            let colon = path.find(':').unwrap();
+            let s = usize::from_str(&path[2..colon]).unwrap();
+            let l = u32::from_str(&path[colon+1..]).unwrap();
+            let (resp, w) = streaming_body(&req).with_chunk_size(s).with_gzip_level(l).build();
             if let Some(mut w) = w {
                 w.write_all(WONDERLAND).unwrap();
             }
@@ -93,8 +98,10 @@ fn serve_req(req: Request<Body>) -> Response<Body> {
         }
         b'a' => {
             // chunked, data written after returning the Response.
-            let l = u32::from_str(&path[2..]).unwrap();
-            let (resp, w) = streaming_body(&req).with_gzip_level(l).build();
+            let colon = path.find(':').unwrap();
+            let s = usize::from_str(&path[2..colon]).unwrap();
+            let l = u32::from_str(&path[colon+1..]).unwrap();
+            let (resp, w) = streaming_body(&req).with_chunk_size(s).with_gzip_level(l).build();
             tokio::spawn(future::lazy(|| {
                 if let Some(mut w) = w {
                     w.write_all(WONDERLAND).unwrap();
@@ -108,70 +115,160 @@ fn serve_req(req: Request<Body>) -> Response<Body> {
 }
 
 /// Returns the hostport of a newly-created, never-destructed server.
-fn new_server() -> String {
+fn new_server() -> SocketAddr {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let addr = "127.0.0.1:0".parse().unwrap();
         let server =
-            hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn_ok(serve_req));
+            hyper::server::Server::bind(&addr)
+            .tcp_nodelay(true)
+            .serve(|| hyper::service::service_fn_ok(serve_req));
         let addr = server.local_addr();
         tx.send(addr).unwrap();
         tokio::run(server.map_err(|e| panic!(e)))
     });
-    let addr = rx.recv().unwrap();
-    format!("http://{}:{}", addr.ip(), addr.port())
+    rx.recv().unwrap()
 }
 
 lazy_static! {
-    static ref SERVER: String = { new_server() };
+    static ref SERVER: SocketAddr = { new_server() };
 }
 
-fn serve(b: &mut criterion::Bencher, path: &str) {
-    let client = reqwest::Client::new();
+/// Benchmarks a `GET` request for the given path using raw sockets.
+///
+/// This avoids using `reqwest` to keep the measurement as focused on the server-side performance
+/// as possible. It uses keepalives, not only to focus the measurement on the request but also
+/// to avoid errors due to ephemeral port exhaustion. This requires some parsing with `httparse`
+/// to read the correct amount of data.
+fn get(b: &mut criterion::Bencher, path: &str) {
+    let _ = env_logger::try_init();
+    let mut v = Vec::new();
+    v.extend(b"GET /");
+    v.extend(path.as_bytes());
+    v.extend(&b" HTTP/1.1\r\nHost: localhost\r\nAccept-Encoding: gzip\r\n\r\n"[..]);
 
-    // Add enough buffer space for the uncompressed representation and some extra header stuff.
-    // Should be plenty for effective or ineffective compression.
-    let mut buf = Vec::with_capacity(WONDERLAND.len());
-    let mut run = || {
-        let mut resp = client
-            .get(&format!("{}/{}", &*SERVER, path))
-            .send()
-            .unwrap();
-        buf.clear();
-        let size = resp.read_to_end(&mut buf).unwrap();
-        assert_eq!(http::StatusCode::OK, resp.status());
-        assert_eq!(size, WONDERLAND.len());
-    };
-    run(); // warm.
-    b.iter(run);
+    // Add enough buffer space for the uncompressed representation and some headers.
+    let mut buf = vec![0u8; WONDERLAND.len() + 8192];
+
+    use socket2::{Domain, Socket, Type};
+    let s = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
+    s.set_reuse_address(true).unwrap();
+    s.set_nodelay(true).unwrap();
+    s.connect(&(*SERVER).into()).unwrap();
+    let mut s = s.into_tcp_stream();
+    b.iter(move || {
+        s.write_all(&v[..]).unwrap();
+
+        let mut hdrs_buf = [httparse::EMPTY_HEADER; 16];
+        let mut resp = httparse::Response::new(&mut hdrs_buf);
+        let mut end = s.read(&mut buf[..]).unwrap();
+        let mut pos = resp.parse(&buf[..end]).unwrap().unwrap();
+        assert_eq!(resp.code, Some(200));
+        let mut hdr_len: Option<usize> = None;
+        let mut chunked = false;
+        for h in resp.headers {
+            if h.name.eq_ignore_ascii_case("Content-Length") {
+                assert!(!chunked);
+                assert!(hdr_len.is_none());
+                hdr_len = Some(std::str::from_utf8(h.value).unwrap().parse().unwrap());
+            } else if h.name.eq_ignore_ascii_case("Transfer-Encoding") {
+                assert!(!chunked);
+                assert!(hdr_len.is_none());
+                assert!(h.value == b"chunked");
+                chunked = true;
+            }
+        }
+        if let Some(l) = hdr_len {
+            assert!(end <= pos + l, "end={} pos={} l={}", end, pos, l);
+            if end < pos + l {
+                s.read_exact(&mut buf[end..pos + l]).unwrap();
+            }
+            return;
+        } else if !chunked {
+            panic!("not chunked, no length");
+        }
+        loop {
+            let r = match httparse::parse_chunk_size(&buf[pos..end]) {
+                Err(e) => panic!("error={} pos={} end={} buf[pos..end]={:?}",
+                                 e, pos, end, String::from_utf8_lossy(&buf[pos..end])),
+                Ok(r) => r,
+            };
+            match r {
+                httparse::Status::Partial => {
+                    end += s.read(&mut buf[end..]).unwrap();
+                    continue;
+                },
+                httparse::Status::Complete((p, l)) => {
+                    let l: usize = l.try_into().unwrap();
+                    pos += p;
+                    while end < pos + l + 2 {
+                        end += s.read(&mut buf[end..]).unwrap();
+                    }
+                    assert_eq!(buf[pos + l .. pos + l + 2], b"\r\n"[..]);
+                    if l == 0 {
+                        assert!(end == pos + l + 2);
+                        return;
+                    }
+                    pos += l + 2;
+                },
+            }
+        }
+    });
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
     c.bench(
         "serve",
-        criterion::Benchmark::new("static", |b| serve(b, "s"))
-            .throughput(criterion::Throughput::Bytes(WONDERLAND.len() as u32)),
+        Benchmark::new("static", |b| get(b, "s"))
+            .throughput(Throughput::Bytes(WONDERLAND.len() as u32)),
     );
     c.bench(
         "serve",
-        criterion::Benchmark::new("copied", |b| serve(b, "c"))
-            .throughput(criterion::Throughput::Bytes(WONDERLAND.len() as u32)),
+        Benchmark::new("copied", |b| get(b, "c"))
+            .throughput(Throughput::Bytes(WONDERLAND.len() as u32)),
     );
     c.bench(
-        "serve_chunked_before_gzip",
-        criterion::ParameterizedBenchmark::new("level", |b, p| serve(b, &format!("b{}", p)), 0..=9)
-            .throughput(|_| criterion::Throughput::Bytes(WONDERLAND.len() as u32)),
+        "streaming_body_before",
+        ParameterizedBenchmark::new("gzip", |b, p| get(b, &format!("b4096:{}", p)), 0..=9)
+            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
     );
     c.bench(
-        "serve_chunked_after_gzip",
-        criterion::ParameterizedBenchmark::new("level", |b, p| serve(b, &format!("a{}", p)), 0..=9)
-            .throughput(|_| criterion::Throughput::Bytes(WONDERLAND.len() as u32)),
+        "streaming_body_after",
+        ParameterizedBenchmark::new("gzip", |b, p| get(b, &format!("a4096:{}", p)), 0..=9)
+            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
+    );
+
+    // Also benchmark larger chunksizes, but only with gzip level 0 (disabled). The chunk size
+    // difference is dwarfed by gzip overhead. When not gzipping, it makes a noticeable difference,
+    // probably for two reasons:
+    //
+    // * more writes. hyper (as of 0.12.33) forces a flush every 16 buffers (see
+    //   hyper::proto::h1::io::MAX_BUF_LIST_BUFFERS), so to write the entire request in one writev
+    //   call, chunks must be at least 1/16th of the total file size.
+    //
+    // * more memory allocations.
+    c.bench(
+        "streaming_body_before",
+        ParameterizedBenchmark::new("chunksize", |b, p| get(b, &format!("b{}:0", p)),
+                                    &[4096, 16384, 65536, 1048576])
+            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
+    );
+    c.bench(
+        "streaming_body_after",
+        ParameterizedBenchmark::new("chunksize", |b, p| get(b, &format!("a{}:0", p)),
+                                    &[4096, 16384, 65536, 1048576])
+            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
     );
 }
 
 criterion_group! {
     name = benches;
-    config = Criterion::default().sample_size(10);
+
+    // Tweak the config to run more quickly; there are a lot of bench cases here.
+    config = Criterion::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_secs(1));
     targets = criterion_benchmark
 }
 criterion_main!(benches);

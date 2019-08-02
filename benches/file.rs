@@ -27,6 +27,7 @@ use std::ffi::OsString;
 use std::fs::File;
 use std::io::{Read, Write};
 use std::sync::Mutex;
+use std::time::Duration;
 use tempfile::TempDir;
 
 fn serve(
@@ -125,5 +126,14 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench_function("serve_last_byte_1mib", serve_last_byte_1mib);
 }
 
-criterion_group!(benches, criterion_benchmark);
+criterion_group! {
+    name = benches;
+
+    // Tweak the config to run more quickly; there are a lot of bench cases here.
+    config = Criterion::default()
+        .sample_size(10)
+        .warm_up_time(Duration::from_millis(100))
+        .measurement_time(Duration::from_secs(1));
+    targets = criterion_benchmark
+}
 criterion_main!(benches);
