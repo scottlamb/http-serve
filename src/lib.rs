@@ -145,7 +145,7 @@ pub trait Entity: 'static + Send {
 /// Returns iff it's preferable to use `Content-Encoding: gzip` when responding to the given
 /// request, rather than no content coding.
 ///
-/// Use via `should_gzip(req.headers().get())`.
+/// Use via `should_gzip(req.headers())`.
 ///
 /// Follows the rules of [RFC 7231 section
 /// 5.3.4](https://tools.ietf.org/html/rfc7231#section-5.3.4).
@@ -212,6 +212,7 @@ pub fn should_gzip(headers: &HeaderMap) -> bool {
 pub struct StreamingBodyBuilder {
     chunk_size: usize,
     gzip_level: u32,
+    should_gzip: bool,
     body_needed: bool,
 }
 
@@ -223,24 +224,29 @@ pub struct StreamingBodyBuilder {
 pub fn streaming_body<T>(req: &http::Request<T>) -> StreamingBodyBuilder {
     StreamingBodyBuilder {
         chunk_size: 4096,
-        gzip_level: match should_gzip(req.headers()) {
-            true => 6,
-            false => 0,
-        },
+        gzip_level: 6,
+        should_gzip: should_gzip(req.headers()),
         body_needed: *req.method() != http::method::Method::HEAD,
     }
 }
 
 impl StreamingBodyBuilder {
+    /// Sets the size of a data chunk.
+    ///
+    /// This is a compromise between memory usage and efficiency. The default of 4096 is usually
+    /// fine; increasing will likely only be noticeably more efficient when compression is off.
     pub fn with_chunk_size(self, chunk_size: usize) -> Self {
         StreamingBodyBuilder { chunk_size, ..self }
     }
 
-    pub fn with_gzip_level(self, level: u32) -> Self {
-        StreamingBodyBuilder {
-            gzip_level: if self.gzip_level == 0 { 0 } else { level },
-            ..self
-        }
+    /// Sets the gzip compression level.
+    ///
+    /// `gzip_level` should be an integer between 0 and 9 (inclusive).
+    /// 0 means no compression; 9 gives the best compression (but most CPU usage).
+    ///
+    /// This is only effective if the client supports compression.
+    pub fn with_gzip_level(self, gzip_level: u32) -> Self {
+        StreamingBodyBuilder { gzip_level, ..self }
     }
 
     pub fn build<P, D, E>(self) -> (http::Response<P>, Option<BodyWriter<D, E>>)
@@ -254,7 +260,7 @@ impl StreamingBodyBuilder {
         resp.headers_mut()
             .append(header::VARY, HeaderValue::from_static("accept-encoding"));
 
-        if self.gzip_level > 0 {
+        if self.should_gzip && self.gzip_level > 0 {
             resp.headers_mut()
                 .append(header::CONTENT_ENCODING, HeaderValue::from_static("gzip"));
         }
@@ -263,7 +269,7 @@ impl StreamingBodyBuilder {
             return (resp, None);
         }
 
-        let w = match self.gzip_level > 0 {
+        let w = match self.should_gzip && self.gzip_level > 0 {
             true => BodyWriter::gzipped(w, flate2::Compression::new(self.gzip_level)),
             false => BodyWriter::raw(w),
         };
