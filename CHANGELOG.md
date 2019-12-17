@@ -1,11 +1,12 @@
 # 0.2.0 (unreleased)
 
+* BREAKING CHANGE: update to hyper 0.13.x, tokio 0.2.x, bytes 0.5.x, http
+  0.2.x, futures 0.3.x.
 * BREAKING CHANGE: use
-  [`tokio-threadpool::blocking`](https://docs.rs/tokio-threadpool/0.1.15/tokio_threadpool/fn.blocking.html)
-  from `http_serve::ChunkedReadFile` rather than hand off to a
-  [futures-cpupool](https://crates.io/crates/futures-cpupool). This simplifies
-  the `ChunkedReadFile` interface.
-* BREAKING CHANGE: bump minimum Rust version to 1.34.0.
+  [`tokio::task::block_in_place`](https://docs.rs/tokio/0.2.2/tokio/task/fn.block_in_place.html)
+  from `http_serve::ChunkedReadFile` rather than hand off to a thread pool.
+  This simplifies the `ChunkedReadFile` interface.
+* BREAKING CHANGE: bump minimum Rust version to 1.39.0.
 * Convert benchmarks to [criterion](https://crates.io/crates/criterion)
   to support running with stable Rust.
 

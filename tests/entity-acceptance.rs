@@ -18,14 +18,15 @@ extern crate reqwest;
 extern crate smallvec;
 extern crate tokio;
 
-use futures::stream;
-use futures::{Future, Stream};
-use http::header::{self, HeaderValue};
+use futures::{stream, Stream};
+use http::header::HeaderValue;
 use http::{Request, Response};
 use hyper::body::Body;
 use std::io::Read;
 use std::ops::Range;
 use std::time::SystemTime;
+
+type BoxedError = Box<dyn std::error::Error + Send + Sync>;
 
 static BODY: &'static [u8] =
     b"01234567890123456789012345678901234567890123456789012345678901234567890123456789\
@@ -38,7 +39,7 @@ struct FakeEntity {
 }
 
 impl http_serve::Entity for &'static FakeEntity {
-    type Data = hyper::Chunk;
+    type Data = bytes::Bytes;
     type Error = Box<dyn std::error::Error + Send + Sync>;
 
     fn len(&self) -> u64 {
@@ -47,10 +48,10 @@ impl http_serve::Entity for &'static FakeEntity {
     fn get_range(
         &self,
         range: Range<u64>,
-    ) -> Box<Stream<Item = Self::Data, Error = Self::Error> + Send> {
-        Box::new(stream::once(Ok(BODY
-            [range.start as usize..range.end as usize]
-            .into())))
+    ) -> Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync> {
+        Box::new(stream::once(futures::future::ok(
+            BODY[range.start as usize..range.end as usize].into(),
+        )))
     }
     fn add_headers(&self, headers: &mut http::header::HeaderMap) {
         headers.insert(
@@ -66,24 +67,29 @@ impl http_serve::Entity for &'static FakeEntity {
     }
 }
 
-fn serve(req: Request<Body>) -> Response<Body> {
+async fn serve(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
     let entity: &'static FakeEntity = match req.uri().path() {
         "/none" => &*ENTITY_NO_ETAG,
         "/strong" => &*ENTITY_STRONG_ETAG,
         "/weak" => &*ENTITY_WEAK_ETAG,
         p => panic!("unexpected path {}", p),
     };
-    http_serve::serve(entity, &req)
+    Ok(http_serve::serve(entity, &req))
 }
 
 fn new_server() -> String {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let server =
-            hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn_ok(serve));
-        tx.send(server.local_addr()).unwrap();
-        tokio::run(server.map_err(|e| eprintln!("server error: {}", e)))
+        let make_svc = hyper::service::make_service_fn(|_conn| {
+            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+        });
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let srv = rt.enter(|| {
+            let addr = ([127, 0, 0, 1], 0).into();
+            hyper::server::Server::bind(&addr).serve(make_svc)
+        });
+        tx.send(srv.local_addr()).unwrap();
+        rt.block_on(srv).unwrap();
     });
     let addr = rx.recv().unwrap();
     format!("http://{}:{}", addr.ip(), addr.port())
@@ -120,8 +126,11 @@ fn serve_without_etag() {
     // Full body.
     let mut resp = client.get(&url).send().unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -129,8 +138,11 @@ fn serve_without_etag() {
     // If-Match any should still send the full body.
     let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -150,7 +162,7 @@ fn serve_without_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::NOT_MODIFIED, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"", &buf[..]);
@@ -162,8 +174,11 @@ fn serve_without_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -175,7 +190,7 @@ fn serve_without_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::NOT_MODIFIED, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"", &buf[..]);
@@ -188,7 +203,7 @@ fn serve_without_etag() {
         .unwrap();
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
     assert_eq!(
-        resp.headers().get(header::CONTENT_RANGE).unwrap(),
+        resp.headers().get(reqwest::header::CONTENT_RANGE).unwrap(),
         &format!("bytes 1-3/{}", BODY.len())
     );
     buf.clear();
@@ -201,10 +216,10 @@ fn serve_without_etag() {
         .header("Range", "bytes=0-1, 3-4")
         .send()
         .unwrap();
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
     assert_eq!(
-        resp.headers().get(header::CONTENT_TYPE).unwrap(),
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
         &"multipart/byteranges; boundary=B"
     );
     buf.clear();
@@ -231,9 +246,12 @@ fn serve_without_etag() {
         .header("Range", "bytes=0-100, 120-240")
         .send()
         .unwrap();
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -246,7 +264,7 @@ fn serve_without_etag() {
         .unwrap();
     assert_eq!(reqwest::StatusCode::RANGE_NOT_SATISFIABLE, resp.status());
     assert_eq!(
-        resp.headers().get(header::CONTENT_RANGE).unwrap(),
+        resp.headers().get(reqwest::header::CONTENT_RANGE).unwrap(),
         &format!("bytes */{}", BODY.len())
     );
     buf.clear();
@@ -261,7 +279,10 @@ fn serve_without_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -274,8 +295,11 @@ fn serve_without_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -288,8 +312,11 @@ fn serve_without_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -305,8 +332,11 @@ fn serve_with_strong_etag() {
     // If-Match any should still send the full body.
     let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -318,8 +348,11 @@ fn serve_with_strong_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -339,7 +372,7 @@ fn serve_with_strong_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::NOT_MODIFIED, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"", &buf[..]);
@@ -351,7 +384,7 @@ fn serve_with_strong_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -364,9 +397,9 @@ fn serve_with_strong_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
-    assert_eq!(None, resp.headers().get(header::CONTENT_TYPE));
+    assert_eq!(None, resp.headers().get(reqwest::header::CONTENT_TYPE));
     assert_eq!(
-        resp.headers().get(header::CONTENT_RANGE).unwrap(),
+        resp.headers().get(reqwest::header::CONTENT_RANGE).unwrap(),
         &format!("bytes 1-3/{}", BODY.len())
     );
     buf.clear();
@@ -381,8 +414,11 @@ fn serve_with_strong_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -398,8 +434,11 @@ fn serve_with_weak_etag() {
     // If-Match any should still send the full body.
     let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -419,7 +458,7 @@ fn serve_with_weak_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::NOT_MODIFIED, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"", &buf[..]);
@@ -431,7 +470,7 @@ fn serve_with_weak_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);
@@ -444,8 +483,11 @@ fn serve_with_weak_etag() {
         .send()
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(resp.headers().get(header::CONTENT_TYPE).unwrap(), MIME);
-    assert_eq!(resp.headers().get(header::CONTENT_RANGE), None);
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     buf.clear();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(BODY, &buf[..]);

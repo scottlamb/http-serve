@@ -6,24 +6,16 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate env_logger;
-extern crate futures;
-extern crate http;
-extern crate http_serve;
-extern crate hyper;
-#[macro_use]
-extern crate lazy_static;
-extern crate reqwest;
-extern crate tokio;
-
-use futures::sync::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::{Future, Stream};
-use http::header;
+use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures::StreamExt;
+use lazy_static::lazy_static;
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::sync::Mutex;
 
-fn serve(req: http::Request<hyper::Body>) -> http::Response<hyper::Body> {
+type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+
+async fn serve(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>, BoxedError> {
     let cmds = CMDS.lock().unwrap().remove(req.uri().path()).unwrap();
     let (resp, w) = http_serve::streaming_body(&req).build();
     let mut w = w.unwrap();
@@ -33,9 +25,9 @@ fn serve(req: http::Request<hyper::Body>) -> http::Response<hyper::Body> {
             Cmd::Abort(e) => w.abort(e),
             Cmd::Flush => w.flush().unwrap(),
         }
-        futures::future::ok(())
+        futures::future::ready(())
     }));
-    resp
+    Ok(resp)
 }
 
 #[derive(Debug)]
@@ -52,15 +44,21 @@ struct Server {
 fn new_server() -> Server {
     let (server_tx, server_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let srv = hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn_ok(serve));
+        let make_svc = hyper::service::make_service_fn(|_conn| {
+            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+        });
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let srv = rt.enter(|| {
+            let addr = ([127, 0, 0, 1], 0).into();
+            hyper::server::Server::bind(&addr).serve(make_svc)
+        });
         let addr = srv.local_addr();
         server_tx
             .send(Server {
                 addr: format!("http://{}:{}", addr.ip(), addr.port()),
             })
             .unwrap();
-        tokio::run(srv.map_err(|e| eprintln!("server error: {}", e)))
+        rt.block_on(srv).unwrap();
     });
     server_rx.recv().unwrap()
 }
@@ -93,7 +91,7 @@ fn basic(path: &'static str, auto_gzip: bool) {
     let mut buf = Vec::new();
     resp.read_to_end(&mut buf).unwrap();
     assert_eq!(b"12345678", &buf[..]);
-    assert_eq!(None, resp.headers().get(header::CONTENT_ENCODING));
+    assert_eq!(None, resp.headers().get(reqwest::header::CONTENT_ENCODING));
 }
 
 #[test]

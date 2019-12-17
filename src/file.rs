@@ -8,15 +8,13 @@
 
 use crate::platform::{self, FileExt};
 use bytes::Buf;
-use futures::future;
-use futures::{Future, Stream};
+use futures::Stream;
 use http::header::{HeaderMap, HeaderValue};
 use std::error::Error as StdError;
 use std::io;
 use std::ops::Range;
 use std::sync::Arc;
 use std::time::{self, SystemTime};
-use tokio_threadpool::blocking;
 
 use crate::Entity;
 
@@ -25,10 +23,9 @@ use crate::Entity;
 static CHUNK_SIZE: u64 = 65_536;
 
 /// A HTTP entity created from a `std::fs::File` which reads the file chunk-by-chunk within
-/// a `tokio_threadpool::blocking` closure.
+/// a `tokio::task::block_in_place` closure.
 ///
-/// Expects to be used from a tokio threadpool; `get_range` calls will fail with
-/// `tokio_threadpool::BlockingError` otherwise.
+/// Expects to be used from a tokio threadpool.
 #[derive(Clone)]
 pub struct ChunkedReadFile<
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
@@ -48,18 +45,19 @@ struct ChunkedReadFileInner {
 
 impl<D, E> ChunkedReadFile<D, E>
 where
-    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
     E: 'static
         + Send
+        + Sync
         + Into<Box<dyn StdError + Send + Sync>>
         + From<Box<dyn StdError + Send + Sync>>,
 {
     /// Creates a new ChunkedReadFile.
     ///
-    /// `read(2)` calls will be wrapped in `tokio_threadpool::blocking` calls so that they don't
+    /// `read(2)` calls will be wrapped in `tokio::task::block_in_place` calls so that they don't
     /// block the tokio reactor thread on local disk I/O. Note that `File::open` and this
     /// constructor (specifically, its call to `fstat(2)`) may also block, so they typically
-    /// should be wrapped in `tokio_threadpool::blocking` as well.
+    /// should be wrapped in `tokio::task::block_in_place` as well.
     pub fn new(file: std::fs::File, headers: HeaderMap) -> Result<Self, io::Error> {
         let info = platform::file_info(&file)?;
 
@@ -78,9 +76,10 @@ where
 
 impl<D, E> Entity for ChunkedReadFile<D, E>
 where
-    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
     E: 'static
         + Send
+        + Sync
         + Into<Box<dyn StdError + Send + Sync>>
         + From<Box<dyn StdError + Send + Sync>>,
 {
@@ -94,40 +93,35 @@ where
     fn get_range(
         &self,
         range: Range<u64>,
-    ) -> Box<dyn Stream<Item = Self::Data, Error = Self::Error> + Send> {
-        let stream =
-            futures::stream::unfold((range, Arc::clone(&self.inner)), move |(left, inner)| {
+    ) -> Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync> {
+        let stream = futures::stream::unfold(
+            (range, Arc::clone(&self.inner)),
+            move |(left, inner)| async {
                 if left.start == left.end {
                     return None;
                 }
                 let chunk_size = std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
-                let f = future::poll_fn(move || {
-                    let left = left.clone();
-                    let inner = inner.clone();
-                    blocking(move || {
-                        let mut chunk = Vec::with_capacity(chunk_size);
-                        unsafe { chunk.set_len(chunk_size) };
-                        let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
-                            Err(e) => {
-                                return Err(
-                                    Box::<dyn StdError + Send + Sync + 'static>::from(e).into()
-                                )
-                            }
-                            Ok(b) => b,
-                        };
-                        chunk.truncate(bytes_read);
-                        Ok((
-                            chunk.into(),
-                            (left.start + bytes_read as u64..left.end, inner),
-                        ))
-                    })
-                    .map_err(|e| Box::<dyn StdError + Send + Sync + 'static>::from(e).into())
-                });
-                let f = f.and_then(|r| r);
-                let _: &dyn Future<Item = (Self::Data, _), Error = Self::Error> = &f;
-                Some(f)
-            });
-        let _: &dyn Stream<Item = Self::Data, Error = Self::Error> = &stream;
+                Some(tokio::task::block_in_place(move || {
+                    let mut chunk = Vec::with_capacity(chunk_size);
+                    unsafe { chunk.set_len(chunk_size) };
+                    let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
+                        Err(e) => {
+                            return (
+                                Err(Box::<dyn StdError + Send + Sync + 'static>::from(e).into()),
+                                (left, inner),
+                            )
+                        }
+                        Ok(b) => b,
+                    };
+                    chunk.truncate(bytes_read);
+                    (
+                        Ok(chunk.into()),
+                        (left.start + bytes_read as u64..left.end, inner),
+                    )
+                }))
+            },
+        );
+        let _: &dyn Stream<Item = Result<Self::Data, Self::Error>> = &stream;
         Box::new(stream)
     }
 
@@ -175,19 +169,22 @@ mod tests {
 
     use super::ChunkedReadFile;
     use super::Entity;
-    use futures::{future::lazy, Future, Stream};
+    use bytes::Bytes;
+    use futures::stream::Stream;
     use http::header::HeaderMap;
-    use hyper::Chunk;
     use std::fs::File;
     use std::io::Write;
-    use tokio_threadpool::ThreadPool;
 
-    type CRF = ChunkedReadFile<Chunk, Box<dyn std::error::Error + Sync + Send>>;
+    type BoxedError = Box<dyn std::error::Error + Sync + Send>;
+    type CRF = ChunkedReadFile<Bytes, BoxedError>;
 
-    #[test]
-    fn basic() {
-        let pool = ThreadPool::new();
-        pool.spawn(lazy(|| {
+    async fn to_bytes(s: Box<dyn Stream<Item = Result<Bytes, BoxedError>> + Send + Sync>) -> Bytes {
+        hyper::body::to_bytes(hyper::Body::from(s)).await.unwrap()
+    }
+
+    #[tokio::test(threaded_scheduler)]
+    async fn basic() {
+        tokio::spawn(async move {
             let tmp = tempfile::tempdir().unwrap();
             let p = tmp.path().join("f");
             let mut f = File::create(&p).unwrap();
@@ -198,14 +195,8 @@ mod tests {
             let etag1 = crf.etag();
 
             // Test returning part/all of the stream.
-            assert_eq!(
-                &crf.get_range(0..4).concat2().wait().unwrap().as_ref(),
-                b"asdf"
-            );
-            assert_eq!(
-                &crf.get_range(1..3).concat2().wait().unwrap().as_ref(),
-                b"sd"
-            );
+            assert_eq!(&to_bytes(crf.get_range(0..4)).await.as_ref(), b"asdf");
+            assert_eq!(&to_bytes(crf.get_range(1..3)).await.as_ref(), b"sd");
 
             // A ChunkedReadFile constructed from a modified file should have a different etag.
             f.write_all(b"jkl;").unwrap();
@@ -213,8 +204,8 @@ mod tests {
             assert_eq!(8, crf.len());
             let etag2 = crf.etag();
             assert_ne!(etag1, etag2);
-            Ok(())
-        }));
-        pool.shutdown().wait().unwrap();
+        })
+        .await
+        .unwrap();
     }
 }

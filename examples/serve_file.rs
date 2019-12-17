@@ -18,44 +18,31 @@
 //! $ curl -v -H 'Range: bytes=1-10,30-40' http://127.0.0.1:1337/
 //! ```
 
-extern crate env_logger;
-extern crate futures;
-extern crate http;
-extern crate http_serve;
-extern crate hyper;
-extern crate leak;
-extern crate mime;
-extern crate tokio;
-extern crate tokio_threadpool;
-
-use futures::Future;
+use bytes::Bytes;
 use http::{Request, Response};
 use http_serve::ChunkedReadFile;
+use hyper::service::{make_service_fn, service_fn};
 use hyper::Body;
-use leak::Leak;
 
 struct Context {
     path: std::ffi::OsString,
 }
 
-fn serve(
-    ctx: &'static Context,
-    req: Request<Body>,
-) -> impl Future<Item = Response<Body>, Error = Box<dyn std::error::Error + Send + Sync + 'static>>
-{
-    futures::future::poll_fn(move || {
-        tokio_threadpool::blocking(move || {
+type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+
+async fn serve(ctx: &'static Context, req: Request<Body>) -> Result<Response<Body>, BoxedError> {
+    let f = tokio::task::block_in_place::<_, Result<ChunkedReadFile<Bytes, BoxedError>, BoxedError>>(
+        move || {
             let f = std::fs::File::open(&ctx.path)?;
             let headers = http::header::HeaderMap::new();
             Ok(ChunkedReadFile::new(f, headers)?)
-        })
-    })
-    .map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
-    .and_then(futures::future::result)
-    .and_then(move |f| Ok(http_serve::serve(f, &req)))
+        },
+    )?;
+    Ok(http_serve::serve(f, &req))
 }
 
-fn main() {
+#[tokio::main]
+async fn main() -> Result<(), BoxedError> {
     let mut args = std::env::args_os();
     if args.len() != 2 {
         eprintln!("Expected serve [FILENAME]");
@@ -63,16 +50,20 @@ fn main() {
     }
     let path = args.nth(1).unwrap();
 
-    let ctx = Box::new(Context { path: path }).leak();
+    let ctx: &'static Context = Box::leak(Box::new(Context { path: path }));
 
     env_logger::init();
-    let addr = "127.0.0.1:1337".parse().unwrap();
-    let server = hyper::server::Server::bind(&addr)
-        .serve(move || hyper::service::service_fn(move |req| serve(ctx, req)));
+    let addr = ([127, 0, 0, 1], 1337).into();
+    let make_svc = make_service_fn(move |_conn| {
+        futures::future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(ctx, req)))
+    });
+    let server = hyper::server::Server::bind(&addr).serve(make_svc);
     println!(
         "Serving {} on http://{} with 1 thread.",
         ctx.path.to_string_lossy(),
         server.local_addr()
     );
-    tokio::run(server.map_err(|e| eprintln!("server error: {}", e)))
+    server.await?;
+
+    Ok(())
 }

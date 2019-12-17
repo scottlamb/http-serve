@@ -20,7 +20,6 @@ extern crate tempfile;
 extern crate tokio;
 
 use criterion::Criterion;
-use futures::Future;
 use http::{Request, Response};
 use hyper::Body;
 use std::ffi::OsString;
@@ -30,31 +29,34 @@ use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
 
-fn serve(
-    req: Request<Body>,
-) -> impl Future<Item = Response<Body>, Error = Box<dyn std::error::Error + Sync + Send + 'static>>
-{
-    futures::future::poll_fn(move || {
-        tokio_threadpool::blocking(move || {
-            let f = std::fs::File::open(&*PATH.lock().unwrap())?;
-            let headers = http::header::HeaderMap::new();
-            Ok(http_serve::ChunkedReadFile::new(f, headers)?)
-        })
-    })
-    .map_err(|_: tokio_threadpool::BlockingError| panic!("BlockingError on thread pool"))
-    .and_then(futures::future::result)
-    .and_then(move |f| Ok(http_serve::serve(f, &req)))
+type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+
+async fn serve(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
+    let f = tokio::task::block_in_place::<_, Result<_, BoxedError>>(move || {
+        let f = std::fs::File::open(&*PATH.lock().unwrap())?;
+        let headers = http::header::HeaderMap::new();
+        Ok(http_serve::ChunkedReadFile::new(f, headers)?)
+    })?;
+    Ok(http_serve::serve(f, &req))
 }
 
 /// Returns the hostport of a newly created, never-destructed server.
 fn new_server() -> String {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let server = hyper::server::Server::bind(&addr).serve(|| hyper::service::service_fn(serve));
-        let addr = server.local_addr();
+        let make_svc = hyper::service::make_service_fn(|_conn| {
+            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+        });
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let srv = rt.enter(|| {
+            let addr = ([127, 0, 0, 1], 0).into();
+            hyper::server::Server::bind(&addr)
+                .tcp_nodelay(true)
+                .serve(make_svc)
+        });
+        let addr = srv.local_addr();
         tx.send(addr).unwrap();
-        tokio::run(server.map_err(|e| panic!(e)))
+        rt.block_on(srv).unwrap();
     });
     let addr = rx.recv().unwrap();
     format!("http://{}:{}", addr.ip(), addr.port())
@@ -90,7 +92,7 @@ fn serve_full_entity(b: &mut criterion::Bencher, kib: &usize) {
         let mut resp = client.get(&*SERVER).send().unwrap();
         buf.clear();
         let size = resp.read_to_end(&mut buf).unwrap();
-        assert_eq!(http::StatusCode::OK, resp.status());
+        assert_eq!(reqwest::StatusCode::OK, resp.status());
         assert_eq!(1024 * *kib, size);
     });
 }
@@ -107,7 +109,7 @@ fn serve_last_byte_1mib(b: &mut criterion::Bencher) {
             .unwrap();
         buf.clear();
         let size = resp.read_to_end(&mut buf).unwrap();
-        assert_eq!(http::StatusCode::PARTIAL_CONTENT, resp.status());
+        assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
         assert_eq!(1, size);
     });
 }

@@ -61,7 +61,7 @@
 //! `hyper::Chunk` would require copying the data in each chunk. An implementation with `ARefs`
 //! could instead `mmap` and `mlock` the data on another thread and provide chunks which `munmap`
 //! when dropped. In these cases, the caller can supply an alternate implementation of the
-//! `hyper::Payload` trait which uses a different `Data` type than `hyper::Chunk`.
+//! `http_body::Body` trait which uses a different `Data` type than `hyper::Chunk`.
 
 use bytes::Buf;
 use futures::Stream;
@@ -79,7 +79,7 @@ macro_rules! fmt_ascii_val {
         use std::fmt::Write;
         write!(buf, $fmt, $($arg)*).expect("fmt_val fits within provided max len");
         unsafe {
-            http::header::HeaderValue::from_shared_unchecked(buf.freeze())
+            http::header::HeaderValue::from_maybe_shared_unchecked(buf.freeze())
         }
     }}
 }
@@ -98,13 +98,13 @@ pub use crate::serving::serve;
 
 /// A reusable, read-only, byte-rangeable HTTP entity for GET and HEAD serving.
 /// Must return exactly the same data on every call.
-pub trait Entity: 'static + Send {
-    type Error: Send;
+pub trait Entity: 'static + Send + Sync {
+    type Error: 'static + Send + Sync;
 
     /// The type of a data chunk.
     ///
-    /// Commonly `hyper::Chunk` but may be something more exotic.
-    type Data: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>;
+    /// Commonly `bytes::Bytes` but may be something more exotic.
+    type Data: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>;
 
     /// Returns the length of the entity's body in bytes.
     fn len(&self) -> u64;
@@ -118,7 +118,7 @@ pub trait Entity: 'static + Send {
     fn get_range(
         &self,
         range: Range<u64>,
-    ) -> Box<dyn Stream<Item = Self::Data, Error = Self::Error> + Send>;
+    ) -> Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync>;
 
     /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
     /// In particular, these headers are the "other representation header fields" described by [RFC
@@ -251,9 +251,9 @@ impl StreamingBodyBuilder {
 
     pub fn build<P, D, E>(self) -> (http::Response<P>, Option<BodyWriter<D, E>>)
     where
-        D: From<Vec<u8>> + Send,
-        E: Send,
-        P: From<Box<dyn Stream<Item = D, Error = E> + Send>>,
+        D: From<Vec<u8>> + Send + Sync,
+        E: Send + Sync,
+        P: From<Box<dyn Stream<Item = Result<D, E>> + Send + Sync>>,
     {
         let (w, stream) = chunker::BodyWriter::with_chunk_size(self.chunk_size);
         let mut resp = http::Response::new(stream.into());

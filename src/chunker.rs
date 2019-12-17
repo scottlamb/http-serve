@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use futures::sync::mpsc;
+use futures::channel::mpsc;
 use futures::Stream;
 use std::io::{self, Write};
 use std::mem;
@@ -41,13 +41,10 @@ where
 {
     pub(crate) fn with_chunk_size(
         cap: usize,
-    ) -> (Self, Box<dyn Stream<Item = D, Error = E> + Send>) {
+    ) -> (Self, Box<dyn Stream<Item = Result<D, E>> + Send + Sync>) {
         assert!(cap > 0);
         let (snd, rcv) = mpsc::unbounded();
-        let body = Box::new(
-            rcv.map_err(|()| unreachable!())
-                .and_then(futures::future::result),
-        );
+        let body = Box::new(rcv);
         (
             BodyWriter {
                 sender: snd,
@@ -118,85 +115,92 @@ where
 #[cfg(test)]
 mod tests {
     use super::BodyWriter;
-    use futures::{Future, Stream};
+    use futures::{stream::StreamExt, stream::TryStreamExt, Stream};
     use std::io::Write;
+    use std::pin::Pin;
 
-    type BodyStream = Box<Stream<Item = Vec<u8>, Error = ()> + Send>;
+    type BoxedError = Box<dyn std::error::Error + 'static + Send + Sync>;
+    type BodyStream = Box<dyn Stream<Item = Result<Vec<u8>, BoxedError>> + Send + Sync>;
+
+    async fn to_vec(s: BodyStream) -> Vec<u8> {
+        Pin::from(s).try_concat().await.unwrap()
+    }
 
     // A smaller-than-chunk-size write shouldn't be flushed on write, and there's currently no Drop
     // implementation to do it either.
-    #[test]
-    fn small_no_flush() {
+    #[tokio::test]
+    async fn small_no_flush() {
         let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1").unwrap(), 1);
         w.truncate();
         drop(w);
-        assert_eq!(b"", &body.concat2().wait().unwrap()[..]);
+        assert_eq!(b"", &to_vec(body).await[..]);
     }
 
     // With a flush, the content should show up.
-    #[test]
-    fn small_flush() {
+    #[tokio::test]
+    async fn small_flush() {
         let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1").unwrap(), 1);
         w.flush().unwrap();
         drop(w);
-        assert_eq!(b"1", &body.concat2().wait().unwrap()[..]);
+        assert_eq!(b"1", &to_vec(body).await[..]);
     }
 
     // A write of exactly the chunk size should be automatically flushed.
-    #[test]
-    fn chunk_write() {
+    #[tokio::test]
+    async fn chunk_write() {
         let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1234").unwrap(), 4);
         w.flush().unwrap();
         drop(w);
-        assert_eq!(b"1234", &body.concat2().wait().unwrap()[..]);
+        assert_eq!(b"1234", &to_vec(body).await[..]);
     }
 
     // ...and everything should be set up for the next write as well.
-    #[test]
-    fn chunk_double_write() {
+    #[tokio::test]
+    async fn chunk_double_write() {
         let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1234").unwrap(), 4);
         assert_eq!(w.write(b"5678").unwrap(), 4);
         w.flush().unwrap();
         drop(w);
-        assert_eq!(b"12345678", &body.concat2().wait().unwrap()[..]);
+        assert_eq!(b"12345678", &to_vec(body).await[..]);
     }
 
     // A larger-than-chunk-size write should be turned into a chunk-size write.
-    #[test]
-    fn large_write() {
+    #[tokio::test]
+    async fn large_write() {
         let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"123456").unwrap(), 4);
         drop(w);
-        assert_eq!(b"1234", &body.concat2().wait().unwrap()[..]);
+        assert_eq!(b"1234", &to_vec(body).await[..]);
     }
 
     // ...similarly, one that uses all the remaining capacity of the chunk.
-    #[test]
-    fn small_large_write() {
+    #[tokio::test]
+    async fn small_large_write() {
         let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         assert_eq!(w.write(b"1").unwrap(), 1);
         assert_eq!(w.write(b"2345").unwrap(), 3);
         drop(w);
-        assert_eq!(b"1234", &body.concat2().wait().unwrap()[..]);
+        assert_eq!(b"1234", &to_vec(body).await[..]);
     }
 
     // Aborting should add an Err element to the stream, ignoring any unflushed bytes.
-    #[test]
-    fn abort() {
+    #[tokio::test]
+    async fn abort() {
         let (mut w, body): (_, BodyStream) = BodyWriter::with_chunk_size(4);
         w.write_all(b"12345").unwrap();
         w.truncate();
-        w.abort(());
+        w.abort(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "asdf",
+        )));
         drop(w);
-        let items = body
-            .then(|r| -> Result<_, ()> { Ok(r) })
-            .collect()
-            .wait()
-            .unwrap();
+        let items = Pin::<_>::from(body)
+            .collect::<Vec<Result<Vec<u8>, BoxedError>>>()
+            .await;
         assert_eq!(items.len(), 2);
         assert_eq!(b"1234", &items[0].as_ref().unwrap()[..]);
         items[1].as_ref().unwrap_err();

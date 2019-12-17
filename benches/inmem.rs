@@ -25,8 +25,8 @@ extern crate tokio;
 
 use bytes::{Bytes, BytesMut};
 use criterion::{Benchmark, Criterion, ParameterizedBenchmark, Throughput};
+use futures::Stream;
 use futures::{future, stream};
-use futures::{Future, Stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
 use http_serve::streaming_body;
@@ -40,11 +40,13 @@ use std::time::{Duration, SystemTime};
 
 static WONDERLAND: &[u8] = include_bytes!("wonderland.txt");
 
+type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+
 struct BytesEntity(Bytes);
 
 impl http_serve::Entity for BytesEntity {
-    type Data = hyper::Chunk;
-    type Error = Box<dyn std::error::Error + Send + Sync>;
+    type Data = Bytes;
+    type Error = BoxedError;
 
     fn len(&self) -> u64 {
         self.0.len() as u64
@@ -52,11 +54,12 @@ impl http_serve::Entity for BytesEntity {
     fn get_range(
         &self,
         range: Range<u64>,
-    ) -> Box<Stream<Item = Self::Data, Error = Self::Error> + Send> {
-        Box::new(stream::once(Ok(self
-            .0
-            .slice(range.start as usize, range.end as usize)
-            .into())))
+    ) -> Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync> {
+        Box::new(stream::once(future::ok(
+            self.0
+                .slice(range.start as usize..range.end as usize)
+                .into(),
+        )))
     }
     fn add_headers(&self, headers: &mut http::header::HeaderMap) {
         headers.insert(
@@ -72,9 +75,9 @@ impl http_serve::Entity for BytesEntity {
     }
 }
 
-fn serve_req(req: Request<Body>) -> Response<Body> {
+async fn serve(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
     let path = req.uri().path();
-    match path.as_bytes()[1] {
+    let resp = match path.as_bytes()[1] {
         b's' => {
             // static entity
             http_serve::serve(BytesEntity(Bytes::from_static(WONDERLAND)), &req)
@@ -89,8 +92,11 @@ fn serve_req(req: Request<Body>) -> Response<Body> {
             // chunked, data written before returning the Response.
             let colon = path.find(':').unwrap();
             let s = usize::from_str(&path[2..colon]).unwrap();
-            let l = u32::from_str(&path[colon+1..]).unwrap();
-            let (resp, w) = streaming_body(&req).with_chunk_size(s).with_gzip_level(l).build();
+            let l = u32::from_str(&path[colon + 1..]).unwrap();
+            let (resp, w) = streaming_body(&req)
+                .with_chunk_size(s)
+                .with_gzip_level(l)
+                .build();
             if let Some(mut w) = w {
                 w.write_all(WONDERLAND).unwrap();
             }
@@ -100,32 +106,41 @@ fn serve_req(req: Request<Body>) -> Response<Body> {
             // chunked, data written after returning the Response.
             let colon = path.find(':').unwrap();
             let s = usize::from_str(&path[2..colon]).unwrap();
-            let l = u32::from_str(&path[colon+1..]).unwrap();
-            let (resp, w) = streaming_body(&req).with_chunk_size(s).with_gzip_level(l).build();
-            tokio::spawn(future::lazy(|| {
+            let l = u32::from_str(&path[colon + 1..]).unwrap();
+            let (resp, w) = streaming_body(&req)
+                .with_chunk_size(s)
+                .with_gzip_level(l)
+                .build();
+            tokio::spawn(async {
                 if let Some(mut w) = w {
                     w.write_all(WONDERLAND).unwrap();
                 }
-                Ok(())
-            }));
+                Ok::<_, std::convert::Infallible>(())
+            });
             resp
         }
         _ => unreachable!(),
-    }
+    };
+    Ok(resp)
 }
 
 /// Returns the hostport of a newly-created, never-destructed server.
 fn new_server() -> SocketAddr {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let addr = "127.0.0.1:0".parse().unwrap();
-        let server =
+        let make_svc = hyper::service::make_service_fn(|_conn| {
+            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+        });
+        let mut rt = tokio::runtime::Runtime::new().unwrap();
+        let srv = rt.enter(|| {
+            let addr = ([127, 0, 0, 1], 0).into();
             hyper::server::Server::bind(&addr)
-            .tcp_nodelay(true)
-            .serve(|| hyper::service::service_fn_ok(serve_req));
-        let addr = server.local_addr();
+                .tcp_nodelay(true)
+                .serve(make_svc)
+        });
+        let addr = srv.local_addr();
         tx.send(addr).unwrap();
-        tokio::run(server.map_err(|e| panic!(e)))
+        rt.block_on(srv).unwrap();
     });
     rx.recv().unwrap()
 }
@@ -189,28 +204,33 @@ fn get(b: &mut criterion::Bencher, path: &str) {
         }
         loop {
             let r = match httparse::parse_chunk_size(&buf[pos..end]) {
-                Err(e) => panic!("error={} pos={} end={} buf[pos..end]={:?}",
-                                 e, pos, end, String::from_utf8_lossy(&buf[pos..end])),
+                Err(e) => panic!(
+                    "error={} pos={} end={} buf[pos..end]={:?}",
+                    e,
+                    pos,
+                    end,
+                    String::from_utf8_lossy(&buf[pos..end])
+                ),
                 Ok(r) => r,
             };
             match r {
                 httparse::Status::Partial => {
                     end += s.read(&mut buf[end..]).unwrap();
                     continue;
-                },
+                }
                 httparse::Status::Complete((p, l)) => {
                     let l: usize = l.try_into().unwrap();
                     pos += p;
                     while end < pos + l + 2 {
                         end += s.read(&mut buf[end..]).unwrap();
                     }
-                    assert_eq!(buf[pos + l .. pos + l + 2], b"\r\n"[..]);
+                    assert_eq!(buf[pos + l..pos + l + 2], b"\r\n"[..]);
                     if l == 0 {
                         assert!(end == pos + l + 2);
                         return;
                     }
                     pos += l + 2;
-                },
+                }
             }
         }
     });
@@ -249,15 +269,21 @@ fn criterion_benchmark(c: &mut Criterion) {
     // * more memory allocations.
     c.bench(
         "streaming_body_before",
-        ParameterizedBenchmark::new("chunksize", |b, p| get(b, &format!("b{}:0", p)),
-                                    &[4096, 16384, 65536, 1048576])
-            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
+        ParameterizedBenchmark::new(
+            "chunksize",
+            |b, p| get(b, &format!("b{}:0", p)),
+            &[4096, 16384, 65536, 1048576],
+        )
+        .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
     );
     c.bench(
         "streaming_body_after",
-        ParameterizedBenchmark::new("chunksize", |b, p| get(b, &format!("a{}:0", p)),
-                                    &[4096, 16384, 65536, 1048576])
-            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
+        ParameterizedBenchmark::new(
+            "chunksize",
+            |b, p| get(b, &format!("a{}:0", p)),
+            &[4096, 16384, 65536, 1048576],
+        )
+        .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
     );
 }
 

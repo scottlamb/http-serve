@@ -9,16 +9,16 @@
 use super::Entity;
 use crate::etag;
 use crate::range;
-use futures::future;
-use futures::stream;
+use futures::stream::{self, StreamExt};
 use futures::{self, Stream};
 use http::header::{self, HeaderMap, HeaderValue};
 use http::{self, Method, Request, Response, StatusCode};
+use http_body::Body;
 use httpdate::{fmt_http_date, parse_http_date};
-use hyper::body::Payload;
 use smallvec::SmallVec;
 use std::io::Write;
 use std::ops::Range;
+use std::pin::Pin;
 use std::time::SystemTime;
 
 const MAX_DECIMAL_U64_BYTES: usize = 20; // u64::max_value().to_string().len()
@@ -55,11 +55,11 @@ fn parse_modified_hdrs(
 
 fn static_body<E: Entity>(
     s: &'static str,
-) -> Box<dyn Stream<Item = E::Data, Error = E::Error> + Send> {
-    Box::new(stream::once(Ok(s.as_bytes().into())))
+) -> Box<dyn Stream<Item = Result<E::Data, E::Error>> + Send + Sync> {
+    Box::new(stream::once(futures::future::ok(s.as_bytes().into())))
 }
 
-fn empty_body<E: Entity>() -> Box<dyn Stream<Item = E::Data, Error = E::Error> + Send> {
+fn empty_body<E: Entity>() -> Box<dyn Stream<Item = Result<E::Data, E::Error>> + Send + Sync> {
     Box::new(stream::empty())
 }
 
@@ -69,12 +69,12 @@ fn empty_body<E: Entity>() -> Box<dyn Stream<Item = E::Data, Error = E::Error> +
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
 pub fn serve<
     E: Entity,
-    P: Payload + From<Box<dyn Stream<Item = E::Data, Error = E::Error> + Send>>,
-    PI,
+    B: Body + From<Box<dyn Stream<Item = Result<E::Data, E::Error>> + Send + Sync>>,
+    BI,
 >(
     e: E,
-    req: &Request<PI>,
-) -> Response<P> {
+    req: &Request<BI>,
+) -> Response<B> {
     if *req.method() != Method::GET && *req.method() != Method::HEAD {
         return Response::builder()
             .status(StatusCode::METHOD_NOT_ALLOWED)
@@ -129,30 +129,30 @@ pub fn serve<
         None => true,
     };
 
-    let mut res = Response::builder();
-    res.header(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
+    let mut res =
+        Response::builder().header(header::ACCEPT_RANGES, HeaderValue::from_static("bytes"));
     if let Some(m) = last_modified {
         // See RFC 7232 section 2.2.1 <https://tools.ietf.org/html/rfc7232#section-2.2.1>: the
         // Last-Modified must not exceed the Date. To guarantee this, set the Date now rather than
         // let hyper set it.
         let d = SystemTime::now();
-        res.header(header::DATE, &*fmt_http_date(d));
+        res = res.header(header::DATE, &*fmt_http_date(d));
         let clamped_m = std::cmp::min(m, d);
-        res.header(header::LAST_MODIFIED, &*fmt_http_date(clamped_m));
+        res = res.header(header::LAST_MODIFIED, &*fmt_http_date(clamped_m));
     }
     if let Some(e) = etag {
-        res.header(http::header::ETAG, e);
+        res = res.header(http::header::ETAG, e);
     }
 
     if precondition_failed {
-        res.status(StatusCode::PRECONDITION_FAILED);
+        res = res.status(StatusCode::PRECONDITION_FAILED);
         return res
             .body(static_body::<E>("Precondition failed").into())
             .unwrap();
     }
 
     if not_modified {
-        res.status(StatusCode::NOT_MODIFIED);
+        res = res.status(StatusCode::NOT_MODIFIED);
         return res.body(empty_body::<E>().into()).unwrap();
     }
 
@@ -161,7 +161,7 @@ pub fn serve<
         range::ResolvedRanges::None => (0..len, true),
         range::ResolvedRanges::Satisfiable(rs) => {
             if rs.len() == 1 {
-                res.header(
+                res = res.header(
                     header::CONTENT_RANGE,
                     fmt_ascii_val!(
                         MAX_DECIMAL_U64_BYTES * 3 + "bytes -/".len(),
@@ -171,7 +171,7 @@ pub fn serve<
                         len
                     ),
                 );
-                res.status(StatusCode::PARTIAL_CONTENT);
+                res = res.status(StatusCode::PARTIAL_CONTENT);
                 (rs[0].clone(), include_entity_headers_on_range)
             } else {
                 // Before serving multiple ranges via multipart/byteranges, estimate the total
@@ -186,15 +186,15 @@ pub fn serve<
             }
         }
         range::ResolvedRanges::NotSatisfiable => {
-            res.header(
+            res = res.header(
                 http::header::CONTENT_RANGE,
                 fmt_ascii_val!(MAX_DECIMAL_U64_BYTES + "bytes */".len(), "bytes */{}", len),
             );
-            res.status(StatusCode::RANGE_NOT_SATISFIABLE);
+            res = res.status(StatusCode::RANGE_NOT_SATISFIABLE);
             return res.body(empty_body::<E>().into()).unwrap();
         }
     };
-    res.header(
+    res = res.header(
         header::CONTENT_LENGTH,
         fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", range.end - range.start),
     );
@@ -209,37 +209,18 @@ pub fn serve<
     res
 }
 
-enum InnerBody<B, C> {
-    Once(Option<C>),
-    B(B),
-}
-
-impl<B, C> Stream for InnerBody<B, C>
-where
-    B: Stream<Item = C>,
-{
-    type Item = C;
-    type Error = B::Error;
-    fn poll(&mut self) -> futures::Poll<Option<C>, Self::Error> {
-        match *self {
-            InnerBody::Once(ref mut o) => Ok(futures::Async::Ready(o.take())),
-            InnerBody::B(ref mut b) => b.poll(),
-        }
-    }
-}
-
 fn send_multipart<
     E: Entity,
-    P: Payload + From<Box<dyn Stream<Item = E::Data, Error = E::Error> + Send>>,
-    PI,
+    B: Body + From<Box<dyn Stream<Item = Result<E::Data, E::Error>> + Send + Sync>>,
+    BI,
 >(
     e: E,
-    req: &Request<PI>,
+    req: &Request<BI>,
     mut res: http::response::Builder,
     rs: SmallVec<[Range<u64>; 1]>,
     len: u64,
     include_entity_headers: bool,
-) -> Response<P> {
+) -> Response<B> {
     let mut body_len = 0;
     let mut each_part_headers = Vec::new();
     if include_entity_headers {
@@ -278,38 +259,40 @@ fn send_multipart<
     const TRAILER: &[u8] = b"\r\n--B--\r\n";
     body_len += TRAILER.len() as u64;
 
-    res.header(
+    res = res.header(
         header::CONTENT_LENGTH,
         fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", body_len),
     );
-    res.header(
+    res = res.header(
         header::CONTENT_TYPE,
         HeaderValue::from_static("multipart/byteranges; boundary=B"),
     );
-    res.status(StatusCode::PARTIAL_CONTENT);
+    res = res.status(StatusCode::PARTIAL_CONTENT);
 
     if *req.method() == Method::HEAD {
         return res.body(empty_body::<E>().into()).unwrap();
     }
 
-    // Create bodies, a stream of E::Stream values as follows: each part's header and body
+    // Create bodies, a stream of streams as follows: each part's header and body
     // (the latter produced lazily), then the overall trailer.
     let bodies = futures::stream::unfold(0, move |state| {
         let i = state >> 1;
         let odd = (state & 1) == 1;
-        let body = if i == rs.len() && odd {
-            return None;
-        } else if i == rs.len() {
-            InnerBody::Once(Some(TRAILER.into()))
-        } else if odd {
-            InnerBody::B(e.get_range(rs[i].clone()))
-        } else {
-            let v = std::mem::replace(&mut part_headers[i], Vec::new());
-            InnerBody::Once(Some(v.into()))
-        };
-        Some(future::ok::<_, E::Error>((body, state + 1)))
+        let body: Pin<Box<dyn Stream<Item = Result<E::Data, E::Error>> + Send + Sync>> =
+            if i == rs.len() && odd {
+                return futures::future::ready(None);
+            } else if i == rs.len() {
+                Box::pin(stream::once(futures::future::ok(TRAILER.into())))
+            } else if odd {
+                e.get_range(rs[i].clone()).into()
+            } else {
+                let v = std::mem::replace(&mut part_headers[i], Vec::new());
+                Box::pin(stream::once(futures::future::ok(v.into())))
+            };
+        futures::future::ready(Some((body, state + 1)))
     });
 
-    let body: Box<dyn Stream<Item = E::Data, Error = E::Error> + Send> = Box::new(bodies.flatten());
+    let body = bodies.flatten();
+    let body: Box<dyn Stream<Item = Result<E::Data, E::Error>> + Send + Sync> = Box::new(body);
     res.body(body.into()).unwrap()
 }
