@@ -240,22 +240,22 @@ fn criterion_benchmark(c: &mut Criterion) {
     c.bench(
         "serve",
         Benchmark::new("static", |b| get(b, "s"))
-            .throughput(Throughput::Bytes(WONDERLAND.len() as u32)),
+            .throughput(Throughput::Bytes(WONDERLAND.len() as u64)),
     );
     c.bench(
         "serve",
         Benchmark::new("copied", |b| get(b, "c"))
-            .throughput(Throughput::Bytes(WONDERLAND.len() as u32)),
+            .throughput(Throughput::Bytes(WONDERLAND.len() as u64)),
     );
     c.bench(
         "streaming_body_before",
         ParameterizedBenchmark::new("gzip", |b, p| get(b, &format!("b4096:{}", p)), 0..=9)
-            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
+            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u64)),
     );
     c.bench(
         "streaming_body_after",
         ParameterizedBenchmark::new("gzip", |b, p| get(b, &format!("a4096:{}", p)), 0..=9)
-            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
+            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u64)),
     );
 
     // Also benchmark larger chunksizes, but only with gzip level 0 (disabled). The chunk size
@@ -274,7 +274,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b, p| get(b, &format!("b{}:0", p)),
             &[4096, 16384, 65536, 1048576],
         )
-        .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
+        .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u64)),
     );
     c.bench(
         "streaming_body_after",
@@ -283,7 +283,7 @@ fn criterion_benchmark(c: &mut Criterion) {
             |b, p| get(b, &format!("a{}:0", p)),
             &[4096, 16384, 65536, 1048576],
         )
-        .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u32)),
+        .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u64)),
     );
 }
 
