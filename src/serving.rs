@@ -209,6 +209,25 @@ pub fn serve<
     res
 }
 
+enum InnerBody<D, E> {
+    Once(Option<D>),
+    B(Pin<Box<dyn Stream<Item = Result<D, E>> + Sync + Send>>),
+}
+
+impl<D, E> Stream for InnerBody<D, E>
+{
+    type Item = Result<D, E>;
+    fn poll_next(self: Pin<&mut Self>, ctx: &mut futures::task::Context) -> std::task::Poll<Option<Result<D, E>>> {
+        // This is safe because the fields are not structurally pinned.
+        // https://doc.rust-lang.org/std/pin/#pinning-is-not-structural-for-field
+        // (In the B variant, the field _holds_ a pin, but it isn't itself pinned.)
+        match unsafe { self.get_unchecked_mut() } {
+            InnerBody::Once(ref mut o) => std::task::Poll::Ready(o.take().map(|d| Ok(d))),
+            InnerBody::B(b) => b.as_mut().poll_next(ctx),
+        }
+    }
+}
+
 fn send_multipart<
     E: Entity,
     B: Body + From<Box<dyn Stream<Item = Result<E::Data, E::Error>> + Send + Sync>>,
@@ -278,16 +297,16 @@ fn send_multipart<
     let bodies = futures::stream::unfold(0, move |state| {
         let i = state >> 1;
         let odd = (state & 1) == 1;
-        let body: Pin<Box<dyn Stream<Item = Result<E::Data, E::Error>> + Send + Sync>> =
+        let body =
             if i == rs.len() && odd {
                 return futures::future::ready(None);
             } else if i == rs.len() {
-                Box::pin(stream::once(futures::future::ok(TRAILER.into())))
+                InnerBody::Once(Some(TRAILER.into()))
             } else if odd {
-                e.get_range(rs[i].clone()).into()
+                InnerBody::B(Pin::from(e.get_range(rs[i].clone())))
             } else {
                 let v = std::mem::replace(&mut part_headers[i], Vec::new());
-                Box::pin(stream::once(futures::future::ok(v.into())))
+                InnerBody::Once(Some(v.into()))
             };
         futures::future::ready(Some((body, state + 1)))
     });
