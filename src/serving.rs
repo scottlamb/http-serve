@@ -163,7 +163,7 @@ pub fn serve<
             if rs.len() == 1 {
                 res = res.header(
                     header::CONTENT_RANGE,
-                    fmt_ascii_val!(
+                    unsafe_fmt_ascii_val!(
                         MAX_DECIMAL_U64_BYTES * 3 + "bytes -/".len(),
                         "bytes {}-{}/{}",
                         rs[0].start,
@@ -188,7 +188,7 @@ pub fn serve<
         range::ResolvedRanges::NotSatisfiable => {
             res = res.header(
                 http::header::CONTENT_RANGE,
-                fmt_ascii_val!(MAX_DECIMAL_U64_BYTES + "bytes */".len(), "bytes */{}", len),
+                unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES + "bytes */".len(), "bytes */{}", len),
             );
             res = res.status(StatusCode::RANGE_NOT_SATISFIABLE);
             return res.body(empty_body::<E>().into()).unwrap();
@@ -196,7 +196,7 @@ pub fn serve<
     };
     res = res.header(
         header::CONTENT_LENGTH,
-        fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", range.end - range.start),
+        unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", range.end - range.start),
     );
     let body = match *req.method() {
         Method::HEAD => empty_body::<E>(),
@@ -280,7 +280,7 @@ fn send_multipart<
 
     res = res.header(
         header::CONTENT_LENGTH,
-        fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", body_len),
+        unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", body_len),
     );
     res = res.header(
         header::CONTENT_TYPE,

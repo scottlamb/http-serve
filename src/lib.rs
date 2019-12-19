@@ -71,9 +71,9 @@ use std::time::SystemTime;
 
 /// Returns a HeaderValue for the given formatted data.
 /// Caller must make two guarantees:
-///    * The data fits within `max_len`.
-///    * The data are ASCII.
-macro_rules! fmt_ascii_val {
+///    * The data fits within `max_len` (or the write will panic).
+///    * The data are ASCII (or HeaderValue's safety will be violated).
+macro_rules! unsafe_fmt_ascii_val {
     ($max_len:expr, $fmt:expr, $($arg:tt)+) => {{
         let mut buf = bytes::BytesMut::with_capacity($max_len);
         use std::fmt::Write;

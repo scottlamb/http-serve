@@ -102,6 +102,12 @@ where
                 }
                 let chunk_size = std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
                 Some(tokio::task::block_in_place(move || {
+                    // Read directly into an uninitialized buffer. By a strict reading of the
+                    // Vec::set_len docs, this is unsound (the buffer must be initialized first),
+                    // but tokio::io::BufReader does something similar (at least these two calls in
+                    // a row), so I'll assume for now it doesn't cause problems in practice.
+                    // It looks like there's work to avoid this problem here:
+                    // https://github.com/rust-lang/rust/issues/42788
                     let mut chunk = Vec::with_capacity(chunk_size);
                     unsafe { chunk.set_len(chunk_size) };
                     let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
@@ -148,7 +154,7 @@ where
         static HEX_U64_LEN: usize = 16;
         #[allow(dead_code)]
         static HEX_U32_LEN: usize = 16;
-        Some(fmt_ascii_val!(
+        Some(unsafe_fmt_ascii_val!(
             HEX_U64_LEN * 3 + HEX_U64_LEN + 5,
             "\"{:x}:{:x}:{:x}:{:x}\"",
             self.inner.inode,
