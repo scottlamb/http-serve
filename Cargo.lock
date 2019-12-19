@@ -677,7 +677,6 @@ dependencies = [
  "tempfile",
  "time",
  "tokio 0.2.4",
- "unicase",
  "winapi 0.3.8",
 ]
 
