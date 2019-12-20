@@ -1,7 +1,7 @@
 # http-serve
 
 Rust helpers for serving HTTP GET and HEAD responses with
-[hyper](https://crates.io/crates/hyper) 0.12.x and
+[hyper](https://crates.io/crates/hyper) 0.13.x and
 [tokio](https://crates.io/crates/tokio).
 
 This crate supplies two ways to respond to HTTP GET and HEAD requests:
