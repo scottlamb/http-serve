@@ -159,7 +159,7 @@ version = "0.12.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "888604f00b3db336d2af898ec3c1d5d0ddf5e6d462220f2ededc33a87ac4bbd5"
 dependencies = [
- "time",
+ "time 0.1.42",
  "url 1.7.2",
 ]
 
@@ -176,7 +176,7 @@ dependencies = [
  "publicsuffix",
  "serde",
  "serde_json",
- "time",
+ "time 0.1.42",
  "try_from",
  "url 1.7.2",
 ]
@@ -276,10 +276,11 @@ dependencies = [
 
 [[package]]
 name = "crossbeam-queue"
-version = "0.2.0"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "dfd6515864a82d2f877b42813d4553292c6659498c9a2aa31bab5a15243c2700"
+checksum = "c695eeca1e7173472a32221542ae469b3e9aac3a4fc81f7696bcad82029493db"
 dependencies = [
+ "cfg-if",
  "crossbeam-utils 0.7.0",
 ]
 
@@ -340,9 +341,9 @@ checksum = "bb1f6b1ce1c140482ea30ddd3335fc0024ac7ee112895426e0a629a6c20adfe3"
 
 [[package]]
 name = "encoding_rs"
-version = "0.8.21"
+version = "0.8.22"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f730a5068736d360795b76e8c53ef51d052a4090d281412da851f5fd6204f36d"
+checksum = "cd8d03faa7fe0c1431609dfad7bbe827af30f82e1e2ae6f7ee4fca6bd764bc28"
 dependencies = [
  "cfg-if",
 ]
@@ -597,7 +598,7 @@ dependencies = [
  "indexmap",
  "log",
  "slab",
- "tokio 0.2.5",
+ "tokio 0.2.6",
  "tokio-util",
 ]
 
@@ -672,11 +673,11 @@ dependencies = [
  "log",
  "mime",
  "reqwest",
- "smallvec 1.0.0",
+ "smallvec 1.1.0",
  "socket2",
  "tempfile",
- "time",
- "tokio 0.2.5",
+ "time 0.2.1",
+ "tokio 0.2.6",
  "winapi 0.3.8",
 ]
 
@@ -719,7 +720,7 @@ dependencies = [
  "log",
  "net2",
  "rustc_version",
- "time",
+ "time 0.1.42",
  "tokio 0.1.22",
  "tokio-buf",
  "tokio-executor",
@@ -749,8 +750,8 @@ dependencies = [
  "log",
  "net2",
  "pin-project",
- "time",
- "tokio 0.2.5",
+ "time 0.1.42",
+ "tokio 0.2.6",
  "tower-service",
  "want 0.3.0",
 ]
@@ -1334,9 +1335,9 @@ dependencies = [
 
 [[package]]
 name = "rayon"
-version = "1.2.1"
+version = "1.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43739f8831493b276363637423d3622d4bd6394ab6f0a9c4a552e208aeb7fddd"
+checksum = "db6ce3297f9c85e16621bb8cca38a06779ffc31bb8184e1be4bed2be4678a098"
 dependencies = [
  "crossbeam-deque",
  "either",
@@ -1345,12 +1346,12 @@ dependencies = [
 
 [[package]]
 name = "rayon-core"
-version = "1.6.1"
+version = "1.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f8bf17de6f23b05473c437eb958b9c850bfc8af0961fe17b4cc92d5a627b4791"
+checksum = "08a89b46efaf957e52b18062fb2f4660f8b8a4dde1807ca002690868ef2c85a9"
 dependencies = [
  "crossbeam-deque",
- "crossbeam-queue 0.2.0",
+ "crossbeam-queue 0.2.1",
  "crossbeam-utils 0.7.0",
  "lazy_static",
  "num_cpus",
@@ -1430,7 +1431,7 @@ dependencies = [
  "serde",
  "serde_json",
  "serde_urlencoded",
- "time",
+ "time 0.1.42",
  "tokio 0.1.22",
  "tokio-executor",
  "tokio-io",
@@ -1583,9 +1584,9 @@ dependencies = [
 
 [[package]]
 name = "smallvec"
-version = "1.0.0"
+version = "1.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4ecf3b85f68e8abaa7555aa5abdb1153079387e60b718283d732f03897fcfc86"
+checksum = "44e59e0c9fa00817912ae6e4e6e3c4fe04455e75699d06eedc7d85917ed8e8f4"
 
 [[package]]
 name = "socket2"
@@ -1684,10 +1685,16 @@ dependencies = [
 ]
 
 [[package]]
-name = "tinytemplate"
-version = "1.0.2"
+name = "time"
+version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4574b75faccaacddb9b284faecdf0b544b80b6b294f3d062d325c5726a209c20"
+checksum = "ac6de5d6171ae395cd957a9cfdcf9a41e39fe23e558b29043104a896a79021b6"
+
+[[package]]
+name = "tinytemplate"
+version = "1.0.3"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57a3c6667d3e65eb1bc3aed6fd14011c6cbc3a0665218ab7f5daf040b9ec371a"
 dependencies = [
  "serde",
  "serde_json",
@@ -1714,9 +1721,9 @@ dependencies = [
 
 [[package]]
 name = "tokio"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13fb0a0dab58ae3db3832810b2aabb98dd42be27c04e7f7f1ae3a6ac78f858d1"
+checksum = "0e1bef565a52394086ecac0a6fa3b8ace4cb3a138ee1d96bd2b93283b56824e3"
 dependencies = [
  "bytes 0.5.3",
  "fnv",
@@ -1865,7 +1872,7 @@ dependencies = [
  "futures-sink",
  "log",
  "pin-project-lite",
- "tokio 0.2.5",
+ "tokio 0.2.6",
 ]
 
 [[package]]
@@ -1913,7 +1920,7 @@ version = "0.1.11"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b561e267b2326bb4cebfc0ef9e68355c7abe6c6f522aeac2f5bf95d56c59bdcf"
 dependencies = [
- "smallvec 1.0.0",
+ "smallvec 1.1.0",
 ]
 
 [[package]]

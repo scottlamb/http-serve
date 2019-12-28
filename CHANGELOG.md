@@ -6,7 +6,7 @@
   [`tokio::task::block_in_place`](https://docs.rs/tokio/0.2.2/tokio/task/fn.block_in_place.html)
   from `http_serve::ChunkedReadFile` rather than hand off to a thread pool.
   This simplifies the `ChunkedReadFile` interface.
-* BREAKING CHANGE: bump minimum Rust version to 1.39.0.
+* BREAKING CHANGE: bump minimum Rust version to 1.40.0.
 * Convert benchmarks to [criterion](https://crates.io/crates/criterion)
   to support running with stable Rust.
 

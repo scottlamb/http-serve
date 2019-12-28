@@ -5,7 +5,7 @@ language: rust
 rust:
   - stable
   - beta
-  - 1.39.0
+  - 1.40.0
 script:
   - cargo build --all
   - cargo test --all
