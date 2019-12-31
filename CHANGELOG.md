@@ -1,4 +1,4 @@
-# 0.2.1 (unreleased)
+# 0.2.1
 
 * Use the freshly-released reqwest 0.10.x in tests. This avoids pulling in two
   copies of the hyper/tokio/http/http-body/bytes ecosystems.
