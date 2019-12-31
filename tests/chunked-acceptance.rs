@@ -10,7 +10,7 @@ use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use std::collections::HashMap;
-use std::io::{self, Read, Write};
+use std::io::{self, Write};
 use std::sync::Mutex;
 
 type BoxedError = Box<dyn std::error::Error + Send + Sync>;
@@ -80,77 +80,74 @@ fn setup_req(
     (tx, req)
 }
 
-fn basic(path: &'static str, auto_gzip: bool) {
+async fn basic(path: &'static str, auto_gzip: bool) {
     let _ = env_logger::try_init();
     let (cmds, req) = setup_req(path, auto_gzip);
-    let mut resp = req.send().unwrap();
+    let resp = req.send().await.unwrap();
 
     cmds.unbounded_send(Cmd::WriteAll(b"1234")).unwrap();
     cmds.unbounded_send(Cmd::WriteAll(b"5678")).unwrap();
     drop(cmds);
-    let mut buf = Vec::new();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"12345678", &buf[..]);
     assert_eq!(None, resp.headers().get(reqwest::header::CONTENT_ENCODING));
+    let buf = resp.bytes().await.unwrap();
+    assert_eq!(b"12345678", &buf[..]);
 }
 
-#[test]
-fn no_gzip() {
-    basic("/no_gzip", false);
+#[tokio::test]
+async fn no_gzip() {
+    basic("/no_gzip", false).await;
 }
 
-#[test]
-fn auto_gzip() {
-    basic("/auto_gzip", true);
+#[tokio::test]
+async fn auto_gzip() {
+    basic("/auto_gzip", true).await;
 }
 
-fn abort(path: &'static str, auto_gzip: bool) {
+async fn abort(path: &'static str, auto_gzip: bool) {
     let _ = env_logger::try_init();
     let (cmds, req) = setup_req(path, auto_gzip);
-    let mut resp = req.send().unwrap();
+    let mut resp = req.send().await.unwrap();
 
     cmds.unbounded_send(Cmd::WriteAll(b"1234")).unwrap();
     cmds.unbounded_send(Cmd::Flush).unwrap();
     cmds.unbounded_send(Cmd::WriteAll(b"5678")).unwrap();
-    let mut buf = [0u8; 4];
-    resp.read_exact(&mut buf).unwrap();
-    assert_eq!(b"1234", &buf);
+    let buf = resp.chunk().await.unwrap().unwrap();
+    assert_eq!(b"1234", &buf[..]);
 
     cmds.unbounded_send(Cmd::Abort(Box::new(io::Error::new(
         io::ErrorKind::PermissionDenied, // note: not related to error kind below.
         "foo",
     ))))
     .unwrap();
-    assert_eq!(
-        io::ErrorKind::Other,
-        resp.read(&mut buf).unwrap_err().kind()
-    );
+
+    // This is fragile, but I don't see a better way to check that the error is as expected.
+    let e = format!("{:?}", resp.chunk().await.unwrap_err());
+    assert!(e.contains("UnexpectedEof"), e);
 }
 
-#[test]
-fn no_gzip_abort() {
-    abort("/no_gzip_abort", false);
+#[tokio::test]
+async fn no_gzip_abort() {
+    abort("/no_gzip_abort", false).await;
 }
 
-#[test]
-fn auto_gzip_abort() {
-    abort("/auto_gzip_abort", true);
+#[tokio::test]
+async fn auto_gzip_abort() {
+    abort("/auto_gzip_abort", true).await;
 }
 
-#[test]
-fn manual_gzip() {
+#[tokio::test]
+async fn manual_gzip() {
     use reqwest::header;
     let _ = env_logger::try_init();
     let (cmds, req) = setup_req("/manual_gzip", false);
-    let mut resp = req.header("Accept-Encoding", "gzip").send().unwrap();
+    let resp = req.header("Accept-Encoding", "gzip").send().await.unwrap();
 
     cmds.unbounded_send(Cmd::WriteAll(b"1234")).unwrap();
     drop(cmds);
-    let mut buf = Vec::new();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"\x1f\x8b", &buf[..2]); // gzip magic number.
     assert_eq!(
         resp.headers().get(header::CONTENT_ENCODING).unwrap(),
         "gzip"
     );
+    let buf = resp.bytes().await.unwrap();
+    assert_eq!(b"\x1f\x8b", &buf[..2]); // gzip magic number.
 }

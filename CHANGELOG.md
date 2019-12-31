@@ -1,4 +1,9 @@
-# 0.2.0 (unreleased)
+# 0.2.1 (unreleased)
+
+* Use the freshly-released reqwest 0.10.x in tests. This avoids pulling in two
+  copies of the hyper/tokio/http/http-body/bytes ecosystems.
+
+# 0.2.0
 
 * BREAKING CHANGE: update to hyper 0.13.x, tokio 0.2.x, bytes 0.5.x, http
   0.2.x, futures 0.3.x.

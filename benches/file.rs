@@ -24,7 +24,7 @@ use http::{Request, Response};
 use hyper::Body;
 use std::ffi::OsString;
 use std::fs::File;
-use std::io::{Read, Write};
+use std::io::Write;
 use std::sync::Mutex;
 use std::time::Duration;
 use tempfile::TempDir;
@@ -87,30 +87,33 @@ fn setup(kib: usize) -> TempDir {
 fn serve_full_entity(b: &mut criterion::Bencher, kib: &usize) {
     let _tmpdir = setup(*kib);
     let client = reqwest::Client::new();
-    let mut buf = Vec::with_capacity(*kib);
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
     b.iter(|| {
-        let mut resp = client.get(&*SERVER).send().unwrap();
-        buf.clear();
-        let size = resp.read_to_end(&mut buf).unwrap();
-        assert_eq!(reqwest::StatusCode::OK, resp.status());
-        assert_eq!(1024 * *kib, size);
+        rt.block_on(async {
+            let resp = client.get(&*SERVER).send().await.unwrap();
+            assert_eq!(reqwest::StatusCode::OK, resp.status());
+            let b = resp.bytes().await.unwrap();
+            assert_eq!(1024 * *kib, b.len());
+        })
     });
 }
 
 fn serve_last_byte_1mib(b: &mut criterion::Bencher) {
     let _tmpdir = setup(1024);
     let client = reqwest::Client::new();
-    let mut buf = Vec::with_capacity(1);
+    let mut rt = tokio::runtime::Runtime::new().unwrap();
     b.iter(|| {
-        let mut resp = client
-            .get(&*SERVER)
-            .header("Range", "bytes=-1")
-            .send()
-            .unwrap();
-        buf.clear();
-        let size = resp.read_to_end(&mut buf).unwrap();
-        assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
-        assert_eq!(1, size);
+        rt.block_on(async {
+            let resp = client
+                .get(&*SERVER)
+                .header("Range", "bytes=-1")
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
+            let b = resp.bytes().await.unwrap();
+            assert_eq!(1, b.len());
+        })
     });
 }
 

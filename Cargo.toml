@@ -1,6 +1,6 @@
 [package]
 name = "http-serve"
-version = "0.2.0"
+version = "0.2.1"
 authors = ["Scott Lamb <slamb@slamb.org>"]
 license = "MIT/Apache-2.0"
 readme = "README.md"
@@ -35,7 +35,7 @@ httparse = "1.3.4"
 hyper = "0.13.0"
 lazy_static = "1.0.1"
 log = "0.4.1"
-reqwest = "0.9.4"
+reqwest = { version = "0.10.0", features = ["gzip"] }
 socket2 = { version = "0.3.10", features = ["reuseport"] }
 tempfile = "3.1.0"
 

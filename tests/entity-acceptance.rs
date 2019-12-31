@@ -22,7 +22,6 @@ use futures::{stream, Stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
 use hyper::body::Body;
-use std::io::Read;
 use std::ops::Range;
 use std::time::SystemTime;
 
@@ -116,35 +115,37 @@ lazy_static! {
     static ref SERVER: String = { new_server() };
 }
 
-#[test]
-fn serve_without_etag() {
+#[tokio::test]
+async fn serve_without_etag() {
     let _ = env_logger::try_init();
     let client = reqwest::Client::new();
-    let mut buf = Vec::new();
     let url = format!("{}/none", *SERVER);
 
     // Full body.
-    let mut resp = client.get(&url).send().unwrap();
+    let resp = client.get(&url).send().await.unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
         resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(BODY, &buf[..]);
 
     // If-Match any should still send the full body.
-    let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
+    let resp = client
+        .get(&url)
+        .header("If-Match", "*")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
         resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(BODY, &buf[..]);
 
     // If-Match by etag doesn't match (as this request has no etag).
@@ -152,26 +153,28 @@ fn serve_without_etag() {
         .get(&url)
         .header("If-Match", "\"foo\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::PRECONDITION_FAILED, resp.status());
 
     // If-None-Match any.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("If-None-Match", "*")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::NOT_MODIFIED, resp.status());
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(b"", &buf[..]);
 
     // If-None-Match by etag doesn't match (as this request has no etag).
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("If-None-Match", "\"foo\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
@@ -179,42 +182,42 @@ fn serve_without_etag() {
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(BODY, &buf[..]);
 
     // Unmodified since supplied date.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("If-Modified-Since", SOME_DATE_STR)
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::NOT_MODIFIED, resp.status());
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(b"", &buf[..]);
 
     // Range serving - basic case.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=1-3")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
     assert_eq!(
         resp.headers().get(reqwest::header::CONTENT_RANGE).unwrap(),
         &format!("bytes 1-3/{}", BODY.len())
     );
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(b"123", &buf[..]);
 
     // Range serving - multiple ranges.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=0-1, 3-4")
         .send()
+        .await
         .unwrap();
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
@@ -222,10 +225,9 @@ fn serve_without_etag() {
         resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
         &"multipart/byteranges; boundary=B"
     );
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(
-        "\
+        &b"\
          \r\n--B\r\n\
          Content-Range: bytes 0-1/240\r\n\
          content-type: application/octet-stream\r\n\
@@ -237,14 +239,15 @@ fn serve_without_etag() {
          \r\n\
          34\r\n\
          --B--\r\n"[..],
-        String::from_utf8(buf.clone()).unwrap()
+        &buf[..]
     );
 
     // Range serving - multiple ranges which are less efficient than sending the whole.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=0-100, 120-240")
         .send()
+        .await
         .unwrap();
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     assert_eq!(reqwest::StatusCode::OK, resp.status());
@@ -252,47 +255,47 @@ fn serve_without_etag() {
         resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
         MIME
     );
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(BODY, &buf[..]);
 
     // Range serving - not satisfiable.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=500-")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::RANGE_NOT_SATISFIABLE, resp.status());
     assert_eq!(
         resp.headers().get(reqwest::header::CONTENT_RANGE).unwrap(),
         &format!("bytes */{}", BODY.len())
     );
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(b"", &buf[..]);
 
     // Range serving - matching If-Range by date doesn't honor the range.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=1-3")
         .header("If-Range", SOME_DATE_STR)
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
         resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
         MIME
     );
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(BODY, &buf[..]);
 
     // Range serving - non-matching If-Range by date ignores the range.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=1-3")
         .header("If-Range", LATER_DATE_STR)
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
@@ -300,16 +303,16 @@ fn serve_without_etag() {
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(BODY, &buf[..]);
 
     // Range serving - this resource has no etag, so any If-Range by etag ignores the range.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=1-3")
         .header("If-Range", "\"foo\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
@@ -317,35 +320,22 @@ fn serve_without_etag() {
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
+    let buf = resp.bytes().await.unwrap();
     assert_eq!(BODY, &buf[..]);
 }
 
-#[test]
-fn serve_with_strong_etag() {
+#[tokio::test]
+async fn serve_with_strong_etag() {
     let _ = env_logger::try_init();
     let client = reqwest::Client::new();
-    let mut buf = Vec::new();
     let url = format!("{}/strong", *SERVER);
 
     // If-Match any should still send the full body.
-    let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
-    assert_eq!(reqwest::StatusCode::OK, resp.status());
-    assert_eq!(
-        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
-        MIME
-    );
-    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(BODY, &buf[..]);
-
-    // If-Match by matching etag should send the full body.
-    let mut resp = client
+    let resp = client
         .get(&url)
-        .header("If-Match", "\"foo\"")
+        .header("If-Match", "*")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
@@ -353,48 +343,61 @@ fn serve_with_strong_etag() {
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(BODY, &buf[..]);
+    assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
+
+    // If-Match by matching etag should send the full body.
+    let resp = client
+        .get(&url)
+        .header("If-Match", "\"foo\"")
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reqwest::StatusCode::OK, resp.status());
+    assert_eq!(
+        resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
+        MIME
+    );
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
+    assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
 
     // If-Match by etag which doesn't match.
     let resp = client
         .get(&url)
         .header("If-Match", "\"bar\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::PRECONDITION_FAILED, resp.status());
 
     // If-None-Match by etag which matches.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("If-None-Match", "\"foo\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::NOT_MODIFIED, resp.status());
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"", &buf[..]);
+    assert_eq!(b"", &resp.bytes().await.unwrap()[..]);
 
     // If-None-Match by etag which doesn't match.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("If-None-Match", "\"bar\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(BODY, &buf[..]);
+    assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
 
     // Range serving - If-Range matching by etag.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=1-3")
         .header("If-Range", "\"foo\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::PARTIAL_CONTENT, resp.status());
     assert_eq!(None, resp.headers().get(reqwest::header::CONTENT_TYPE));
@@ -402,16 +405,15 @@ fn serve_with_strong_etag() {
         resp.headers().get(reqwest::header::CONTENT_RANGE).unwrap(),
         &format!("bytes 1-3/{}", BODY.len())
     );
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"123", &buf[..]);
+    assert_eq!(b"123", &resp.bytes().await.unwrap()[..]);
 
     // Range serving - If-Range not matching by etag.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=1-3")
         .header("If-Range", "\"bar\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
@@ -419,68 +421,68 @@ fn serve_with_strong_etag() {
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(BODY, &buf[..]);
+    assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
 }
 
-#[test]
-fn serve_with_weak_etag() {
+#[tokio::test]
+async fn serve_with_weak_etag() {
     let _ = env_logger::try_init();
     let client = reqwest::Client::new();
-    let mut buf = Vec::new();
     let url = format!("{}/weak", *SERVER);
 
     // If-Match any should still send the full body.
-    let mut resp = client.get(&url).header("If-Match", "*").send().unwrap();
+    let resp = client
+        .get(&url)
+        .header("If-Match", "*")
+        .send()
+        .await
+        .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
         resp.headers().get(reqwest::header::CONTENT_TYPE).unwrap(),
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(BODY, &buf[..]);
+    assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
 
     // If-Match by etag doesn't match because matches use the strong comparison function.
     let resp = client
         .get(&url)
         .header("If-Match", "W/\"foo\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::PRECONDITION_FAILED, resp.status());
 
     // If-None-Match by identical weak etag is sufficient.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("If-None-Match", "W/\"foo\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::NOT_MODIFIED, resp.status());
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(b"", &buf[..]);
+    assert_eq!(b"", &resp.bytes().await.unwrap()[..]);
 
     // If-None-Match by etag which doesn't match.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("If-None-Match", "W/\"bar\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(BODY, &buf[..]);
+    assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
 
     // Range serving - If-Range matching by weak etag isn't sufficient.
-    let mut resp = client
+    let resp = client
         .get(&url)
         .header("Range", "bytes=1-3")
         .header("If-Range", "\"foo\"")
         .send()
+        .await
         .unwrap();
     assert_eq!(reqwest::StatusCode::OK, resp.status());
     assert_eq!(
@@ -488,7 +490,5 @@ fn serve_with_weak_etag() {
         MIME
     );
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
-    buf.clear();
-    resp.read_to_end(&mut buf).unwrap();
-    assert_eq!(BODY, &buf[..]);
+    assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
 }
