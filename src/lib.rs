@@ -67,6 +67,7 @@ use bytes::Buf;
 use futures::Stream;
 use http::header::{self, HeaderMap, HeaderValue};
 use std::ops::Range;
+use std::str::FromStr;
 use std::time::SystemTime;
 
 /// Returns a HeaderValue for the given formatted data.
@@ -142,6 +143,30 @@ pub trait Entity: 'static + Send + Sync {
     fn last_modified(&self) -> Option<SystemTime>;
 }
 
+/// Parses an RFC 7231 section 5.3.1 `qvalue` into an integer in [0, 1000].
+/// ```text
+/// qvalue = ( "0" [ "." 0*3DIGIT ] )
+///        / ( "1" [ "." 0*3("0") ] )
+/// ```
+fn parse_qvalue(s: &str) -> Result<u16, ()> {
+    match s {
+        "1" | "1." | "1.0" | "1.00" | "1.000" => return Ok(1000),
+        "0" | "0." => return Ok(0),
+        s if !s.starts_with("0.") => return Err(()),
+        _ => {},
+    };
+    let v = &s[2..];
+    let factor = match v.len() {
+        1 /* 0.x */ => 100,
+        2 /* 0.xx */ => 10,
+        3 /* 0.xxx */ => 1,
+        _ => return Err(()),
+    };
+    let v = u16::from_str(v).map_err(|_| ())?;
+    let q = v * factor;
+    Ok(q)
+}
+
 /// Returns iff it's preferable to use `Content-Encoding: gzip` when responding to the given
 /// request, rather than no content coding.
 ///
@@ -171,19 +196,18 @@ pub fn should_gzip(headers: &HeaderMap) -> bool {
         match parts.next() {
             None => {
                 coding = last_part;
-                quality = 1.0f32;
+                quality = 1000;
             }
             Some(c) => {
                 if !last_part.starts_with("q=") {
                     return false; // unparseable.
                 }
                 let q = &last_part[2..];
-                match q.parse::<f32>() {
-                    Ok(q) if 0f32 <= q && q <= 1f32 => {
+                match parse_qvalue(q) {
+                    Ok(q) => {
                         coding = c;
                         quality = q;
                     }
-                    Ok(_q) => return false, // unparseable.
                     Err(_) => return false, // unparseable.
                 };
             }
@@ -198,15 +222,15 @@ pub fn should_gzip(headers: &HeaderMap) -> bool {
         }
     }
 
-    let gzip_q = gzip_q.or(star_q).unwrap_or(0.0f32);
+    let gzip_q = gzip_q.or(star_q).unwrap_or(0);
 
     // "If the representation has no content-coding, then it is
     // acceptable by default unless specifically excluded by the
     // Accept-Encoding field stating either "identity;q=0" or "*;q=0"
     // without a more specific entry for "identity"."
-    let identity_q = identity_q.or(star_q).unwrap_or(0.001f32);
+    let identity_q = identity_q.or(star_q).unwrap_or(1);
 
-    gzip_q > 0.0f32 && gzip_q >= identity_q
+    gzip_q > 0 && gzip_q >= identity_q
 }
 
 pub struct StreamingBodyBuilder {
@@ -287,6 +311,29 @@ mod tests {
         let mut h = http::HeaderMap::new();
         h.insert(header::ACCEPT_ENCODING, HeaderValue::from_static(value));
         h
+    }
+
+    #[test]
+    fn parse_qvalue() {
+        use super::parse_qvalue;
+        assert_eq!(parse_qvalue("0"), Ok(0));
+        assert_eq!(parse_qvalue("0."), Ok(0));
+        assert_eq!(parse_qvalue("0.0"), Ok(0));
+        assert_eq!(parse_qvalue("0.00"), Ok(0));
+        assert_eq!(parse_qvalue("0.000"), Ok(0));
+        assert_eq!(parse_qvalue("0.0000"), Err(()));
+        assert_eq!(parse_qvalue("0.2"), Ok(200));
+        assert_eq!(parse_qvalue("0.23"), Ok(230));
+        assert_eq!(parse_qvalue("0.234"), Ok(234));
+        assert_eq!(parse_qvalue("1"), Ok(1000));
+        assert_eq!(parse_qvalue("1."), Ok(1000));
+        assert_eq!(parse_qvalue("1.0"), Ok(1000));
+        assert_eq!(parse_qvalue("1.1"), Err(()));
+        assert_eq!(parse_qvalue("1.00"), Ok(1000));
+        assert_eq!(parse_qvalue("1.000"), Ok(1000));
+        assert_eq!(parse_qvalue("1.001"), Err(()));
+        assert_eq!(parse_qvalue("1.0000"), Err(()));
+        assert_eq!(parse_qvalue("2"), Err(()));
     }
 
     #[test]

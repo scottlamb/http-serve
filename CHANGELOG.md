@@ -1,7 +1,7 @@
 # unreleased
 
 * Don't panic on unparseable `Range` header values.
-* Use dynamic dispatch internally to reduce code bloat when there are multiple
+* Reduce code bloat, particularly when there are multiple
   implementations of `Entity` for a given `Data` and `Error` type.
 
 # 0.2.1
