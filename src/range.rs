@@ -32,9 +32,9 @@ pub(crate) enum ResolvedRanges {
 /// Parses the byte-range-set in the range header as described in [RFC 7233 section
 /// 2.1](https://tools.ietf.org/html/rfc7233#section-2.1).
 pub(crate) fn parse(range: Option<&HeaderValue>, len: u64) -> ResolvedRanges {
-    let range = match range {
+    let range = match range.and_then(|v| v.to_str().ok()) {
         None => return ResolvedRanges::None,
-        Some(r) => r.to_str().unwrap(),
+        Some(r) => r,
     };
 
     // byte-ranges-specifier = bytes-unit "=" byte-range-set
@@ -211,5 +211,13 @@ mod tests {
     #[test]
     fn test_resolve_ranges_absent_or_invalid() {
         assert_eq!(ResolvedRanges::None, parse(None, 10000));
+    }
+
+    #[test]
+    fn test_nonascii() {
+        assert_eq!(
+            ResolvedRanges::None,
+            parse(Some(&HeaderValue::from_bytes(b"\xff").unwrap()), 10000)
+        );
     }
 }

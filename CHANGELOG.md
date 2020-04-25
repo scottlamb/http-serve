@@ -1,3 +1,7 @@
+# unreleased
+
+* Don't panic on unparseable `Range` header values.
+
 # 0.2.1
 
 * Use the freshly-released reqwest 0.10.x in tests. This avoids pulling in two
