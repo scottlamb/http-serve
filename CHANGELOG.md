@@ -1,4 +1,4 @@
-# unreleased
+# 0.2.2
 
 * Don't panic on unparseable `Range` header values.
 * Reduce code bloat, particularly when there are multiple
