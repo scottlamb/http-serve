@@ -502,7 +502,6 @@ dependencies = [
  "hyper",
  "lazy_static",
  "log",
- "mime",
  "reqwest",
  "smallvec",
  "socket2",

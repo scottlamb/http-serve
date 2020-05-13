@@ -19,7 +19,6 @@ extern crate http_serve;
 extern crate hyper;
 #[macro_use]
 extern crate lazy_static;
-extern crate mime;
 extern crate socket2;
 extern crate tokio;
 
