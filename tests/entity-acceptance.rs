@@ -112,7 +112,7 @@ lazy_static! {
         etag: Some(HeaderValue::from_static("W/\"foo\"")),
         last_modified: *SOME_DATE,
     };
-    static ref SERVER: String = { new_server() };
+    static ref SERVER: String = new_server();
 }
 
 #[tokio::test]

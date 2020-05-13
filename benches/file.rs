@@ -63,8 +63,8 @@ fn new_server() -> String {
 }
 
 lazy_static! {
-    static ref PATH: Mutex<OsString> = { Mutex::new(OsString::new()) };
-    static ref SERVER: String = { new_server() };
+    static ref PATH: Mutex<OsString> = Mutex::new(OsString::new());
+    static ref SERVER: String = new_server();
 }
 
 /// Sets up the server to serve a 1 MiB file, until the returned `TempDir` goes out of scope and the

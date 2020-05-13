@@ -65,8 +65,8 @@ fn new_server() -> Server {
 
 lazy_static! {
     static ref CMDS: Mutex<HashMap<&'static str, UnboundedReceiver<Cmd>>> =
-        { Mutex::new(HashMap::new()) };
-    static ref SERVER: Server = { new_server() };
+        Mutex::new(HashMap::new());
+    static ref SERVER: Server = new_server();
 }
 
 fn setup_req(

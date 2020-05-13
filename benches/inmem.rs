@@ -146,7 +146,7 @@ fn new_server() -> SocketAddr {
 }
 
 lazy_static! {
-    static ref SERVER: SocketAddr = { new_server() };
+    static ref SERVER: SocketAddr = new_server();
 }
 
 /// Benchmarks a `GET` request for the given path using raw sockets.
