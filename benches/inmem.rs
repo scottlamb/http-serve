@@ -17,8 +17,6 @@ extern crate futures;
 extern crate http;
 extern crate http_serve;
 extern crate hyper;
-#[macro_use]
-extern crate lazy_static;
 extern crate socket2;
 extern crate tokio;
 
@@ -30,6 +28,7 @@ use http::header::HeaderValue;
 use http::{Request, Response};
 use http_serve::streaming_body;
 use hyper::Body;
+use once_cell::sync::Lazy;
 use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
@@ -144,9 +143,7 @@ fn new_server() -> SocketAddr {
     rx.recv().unwrap()
 }
 
-lazy_static! {
-    static ref SERVER: SocketAddr = new_server();
-}
+static SERVER: Lazy<SocketAddr> = Lazy::new(new_server);
 
 /// Benchmarks a `GET` request for the given path using raw sockets.
 ///
