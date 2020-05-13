@@ -6,16 +6,6 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate env_logger;
-extern crate futures;
-extern crate http;
-extern crate http_serve;
-extern crate httpdate;
-extern crate hyper;
-extern crate reqwest;
-extern crate smallvec;
-extern crate tokio;
-
 use futures::{stream, Stream};
 use http::header::HeaderValue;
 use http::{Request, Response};

@@ -9,19 +9,10 @@
 //! Benchmarks of serving data built in to the binary via `include_bytes!`, using both the
 //! `serve` function on an `Entity` and the `streaming_body` method.
 
-#[macro_use]
-extern crate criterion;
-extern crate bytes;
-extern crate env_logger;
-extern crate futures;
-extern crate http;
-extern crate http_serve;
-extern crate hyper;
-extern crate socket2;
-extern crate tokio;
-
 use bytes::{Bytes, BytesMut};
-use criterion::{Benchmark, Criterion, ParameterizedBenchmark, Throughput};
+use criterion::{
+    criterion_group, criterion_main, Benchmark, Criterion, ParameterizedBenchmark, Throughput,
+};
 use futures::Stream;
 use futures::{future, stream};
 use http::header::HeaderValue;

@@ -171,8 +171,6 @@ where
 
 #[cfg(test)]
 mod tests {
-    extern crate tempfile;
-
     use super::ChunkedReadFile;
     use super::Entity;
     use bytes::Bytes;

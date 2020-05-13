@@ -6,17 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[macro_use]
-extern crate criterion;
-extern crate futures;
-extern crate http;
-extern crate http_serve;
-extern crate hyper;
-extern crate reqwest;
-extern crate tempfile;
-extern crate tokio;
-
-use criterion::Criterion;
+use criterion::{criterion_group, criterion_main, Criterion};
 use http::{Request, Response};
 use hyper::Body;
 use once_cell::sync::Lazy;
