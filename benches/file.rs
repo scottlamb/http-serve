@@ -6,22 +6,10 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-#[macro_use]
-extern crate criterion;
-extern crate futures;
-extern crate http;
-extern crate http_serve;
-extern crate hyper;
-#[macro_use]
-extern crate lazy_static;
-extern crate mime;
-extern crate reqwest;
-extern crate tempfile;
-extern crate tokio;
-
-use criterion::Criterion;
+use criterion::{criterion_group, criterion_main, Criterion};
 use http::{Request, Response};
 use hyper::Body;
+use once_cell::sync::Lazy;
 use std::ffi::OsString;
 use std::fs::File;
 use std::io::Write;
@@ -62,10 +50,8 @@ fn new_server() -> String {
     format!("http://{}:{}", addr.ip(), addr.port())
 }
 
-lazy_static! {
-    static ref PATH: Mutex<OsString> = { Mutex::new(OsString::new()) };
-    static ref SERVER: String = { new_server() };
-}
+static PATH: Lazy<Mutex<OsString>> = Lazy::new(|| Mutex::new(OsString::new()));
+static SERVER: Lazy<String> = Lazy::new(new_server);
 
 /// Sets up the server to serve a 1 MiB file, until the returned `TempDir` goes out of scope and the
 /// file is deleted.

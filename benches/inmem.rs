@@ -9,28 +9,17 @@
 //! Benchmarks of serving data built in to the binary via `include_bytes!`, using both the
 //! `serve` function on an `Entity` and the `streaming_body` method.
 
-#[macro_use]
-extern crate criterion;
-extern crate bytes;
-extern crate env_logger;
-extern crate futures;
-extern crate http;
-extern crate http_serve;
-extern crate hyper;
-#[macro_use]
-extern crate lazy_static;
-extern crate mime;
-extern crate socket2;
-extern crate tokio;
-
 use bytes::{Bytes, BytesMut};
-use criterion::{Benchmark, Criterion, ParameterizedBenchmark, Throughput};
+use criterion::{
+    criterion_group, criterion_main, Benchmark, Criterion, ParameterizedBenchmark, Throughput,
+};
 use futures::Stream;
 use futures::{future, stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
 use http_serve::streaming_body;
 use hyper::Body;
+use once_cell::sync::Lazy;
 use std::convert::TryInto;
 use std::io::{Read, Write};
 use std::net::SocketAddr;
@@ -145,9 +134,7 @@ fn new_server() -> SocketAddr {
     rx.recv().unwrap()
 }
 
-lazy_static! {
-    static ref SERVER: SocketAddr = { new_server() };
-}
+static SERVER: Lazy<SocketAddr> = Lazy::new(new_server);
 
 /// Benchmarks a `GET` request for the given path using raw sockets.
 ///

@@ -8,7 +8,7 @@
 
 use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures::StreamExt;
-use lazy_static::lazy_static;
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Mutex;
@@ -63,11 +63,9 @@ fn new_server() -> Server {
     server_rx.recv().unwrap()
 }
 
-lazy_static! {
-    static ref CMDS: Mutex<HashMap<&'static str, UnboundedReceiver<Cmd>>> =
-        { Mutex::new(HashMap::new()) };
-    static ref SERVER: Server = { new_server() };
-}
+static SERVER: Lazy<Server> = Lazy::new(new_server);
+static CMDS: Lazy<Mutex<HashMap<&'static str, UnboundedReceiver<Cmd>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
 
 fn setup_req(
     path: &'static str,

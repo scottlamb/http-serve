@@ -20,9 +20,8 @@ futures = "0.3.1"
 http = "0.2.0"
 http-body = "0.3.1"
 httpdate = "0.3.2"
-mime = "0.3.7"
-smallvec = "1.0.0"
-time = "0.2.1"
+smallvec = "1.4.0"
+time = { version = "0.2.1", default-features = false }
 tokio = { version = "0.2.4", features = ["blocking", "macros", "rt-threaded"] }
 
 [target.'cfg(windows)'.dependencies]
@@ -33,8 +32,8 @@ criterion = "0.3"
 env_logger = "0.7.1"
 httparse = "1.3.4"
 hyper = "0.13.0"
-lazy_static = "1.0.1"
 log = "0.4.1"
+once_cell = "1.3"
 reqwest = { version = "0.10.0", features = ["gzip"] }
 socket2 = { version = "0.3.10", features = ["reuseport"] }
 tempfile = "3.1.0"

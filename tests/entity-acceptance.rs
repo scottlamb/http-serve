@@ -6,22 +6,11 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-extern crate env_logger;
-extern crate futures;
-extern crate http;
-extern crate http_serve;
-extern crate httpdate;
-extern crate hyper;
-#[macro_use]
-extern crate lazy_static;
-extern crate reqwest;
-extern crate smallvec;
-extern crate tokio;
-
 use futures::{stream, Stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
 use hyper::body::Body;
+use once_cell::sync::Lazy;
 use std::ops::Range;
 use std::time::SystemTime;
 
@@ -98,22 +87,21 @@ const SOME_DATE_STR: &str = "Sun, 06 Nov 1994 08:49:37 GMT";
 const LATER_DATE_STR: &str = "Sun, 06 Nov 1994 09:49:37 GMT";
 const MIME: &str = "application/octet-stream";
 
-lazy_static! {
-    static ref SOME_DATE: SystemTime = httpdate::parse_http_date(SOME_DATE_STR).unwrap();
-    static ref ENTITY_NO_ETAG: FakeEntity = FakeEntity {
-        etag: None,
-        last_modified: *SOME_DATE,
-    };
-    static ref ENTITY_STRONG_ETAG: FakeEntity = FakeEntity {
-        etag: Some(HeaderValue::from_static("\"foo\"")),
-        last_modified: *SOME_DATE,
-    };
-    static ref ENTITY_WEAK_ETAG: FakeEntity = FakeEntity {
-        etag: Some(HeaderValue::from_static("W/\"foo\"")),
-        last_modified: *SOME_DATE,
-    };
-    static ref SERVER: String = { new_server() };
-}
+static SOME_DATE: Lazy<SystemTime> =
+    Lazy::new(|| httpdate::parse_http_date(SOME_DATE_STR).unwrap());
+static ENTITY_NO_ETAG: Lazy<FakeEntity> = Lazy::new(|| FakeEntity {
+    etag: None,
+    last_modified: *SOME_DATE,
+});
+static ENTITY_STRONG_ETAG: Lazy<FakeEntity> = Lazy::new(|| FakeEntity {
+    etag: Some(HeaderValue::from_static("\"foo\"")),
+    last_modified: *SOME_DATE,
+});
+static ENTITY_WEAK_ETAG: Lazy<FakeEntity> = Lazy::new(|| FakeEntity {
+    etag: Some(HeaderValue::from_static("W/\"foo\"")),
+    last_modified: *SOME_DATE,
+});
+static SERVER: Lazy<String> = Lazy::new(new_server);
 
 #[tokio::test]
 async fn serve_without_etag() {
