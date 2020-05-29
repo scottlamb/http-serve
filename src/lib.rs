@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 The http-serve developers
+// Copyright (c) 2016-2020 The http-serve developers
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE.txt or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -86,6 +86,10 @@ macro_rules! unsafe_fmt_ascii_val {
 }
 
 mod chunker;
+
+#[cfg(feature = "dir")]
+pub mod dir;
+
 mod etag;
 mod file;
 mod gzip;
@@ -153,7 +157,7 @@ fn parse_qvalue(s: &str) -> Result<u16, ()> {
         "1" | "1." | "1.0" | "1.00" | "1.000" => return Ok(1000),
         "0" | "0." => return Ok(0),
         s if !s.starts_with("0.") => return Err(()),
-        _ => {},
+        _ => {}
     };
     let v = &s[2..];
     let factor = match v.len() {

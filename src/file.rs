@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 The http-serve developers
+// Copyright (c) 2020 The http-serve developers
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE.txt or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -59,6 +59,27 @@ where
     /// constructor (specifically, its call to `fstat(2)`) may also block, so they typically
     /// should be wrapped in `tokio::task::block_in_place` as well.
     pub fn new(file: std::fs::File, headers: HeaderMap) -> Result<Self, io::Error> {
+        let m = file.metadata()?;
+        ChunkedReadFile::new_with_metadata(file, &m, headers)
+    }
+
+    /// Creates a new ChunkedReadFile, with presupplied metadata.
+    ///
+    /// This is an optimization for the case where the caller has already called `fstat(2)`.
+    /// Note that on Windows, this still may perform a blocking file operation, so it should
+    /// still be wrapped in `tokio::task::block_in_place`.
+    pub fn new_with_metadata(
+        file: ::std::fs::File,
+        metadata: &::std::fs::Metadata,
+        headers: HeaderMap,
+    ) -> Result<Self, io::Error> {
+        // `file` might represent a directory. If so, it's better to realize that now (while
+        // we can still send a proper HTTP error) rather than during `get_range` (when all we can
+        // do is drop the HTTP connection).
+        if !metadata.is_file() {
+            return Err(io::Error::new(io::ErrorKind::Other, "expected a file"));
+        }
+
         let info = platform::file_info(&file)?;
 
         Ok(ChunkedReadFile {
