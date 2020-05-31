@@ -9,7 +9,6 @@
 //! Support for directory traversal from local filesystem.
 //! Currently Unix-only.
 
-use futures::future::{err, Either, TryFutureExt};
 use http::header::{self, HeaderMap, HeaderValue};
 use memchr::memchr;
 use std::convert::TryInto;
@@ -85,60 +84,58 @@ impl FsDir {
     ///
     /// Validates that `path` has no `..` segments or interior NULs. Currently doesn't check for
     /// symlinks, however. That may eventually be configurable via the builder.
-    pub fn get(
-        self: &Arc<Self>,
+    pub async fn get(
+        self: Arc<Self>,
         path: &str,
         req_hdrs: &HeaderMap,
-    ) -> impl std::future::Future<Output = Result<Node, Error>> + 'static {
+    ) -> Result<Node, Error> {
         if let Err(e) = validate_path(path) {
-            return Either::Left(err(Error::new(ErrorKind::InvalidInput, e)));
+            return Err(Error::new(ErrorKind::InvalidInput, e));
         }
         let mut buf = Vec::with_capacity(path.len() + b".gz\0".len());
         buf.extend_from_slice(path.as_bytes());
         let should_gzip = self.auto_gzip && super::should_gzip(req_hdrs);
-        let self_ = Arc::clone(self);
-        Either::Right(
-            tokio::task::spawn_blocking(move || -> Result<Node, Error> {
-                if should_gzip {
-                    let path_len = buf.len();
-                    buf.extend_from_slice(&b".gz\0"[..]);
-                    match self_.open_file(
-                        // This is safe because we've ensured in validate_path that there are no
-                        // interior NULs, and we've just appended a NUL.
-                        unsafe { CStr::from_bytes_with_nul_unchecked(&buf[..]) },
-                    ) {
-                        Ok(file) => {
-                            let metadata = file.metadata()?;
-                            if !metadata.is_dir() {
-                                return Ok(Node {
-                                    file,
-                                    metadata,
-                                    auto_gzip: self_.auto_gzip,
-                                    is_gzipped: true,
-                                });
-                            }
+        tokio::task::spawn_blocking(move || -> Result<Node, Error> {
+            if should_gzip {
+                let path_len = buf.len();
+                buf.extend_from_slice(&b".gz\0"[..]);
+                match self.open_file(
+                    // This is safe because we've ensured in validate_path that there are no
+                    // interior NULs, and we've just appended a NUL.
+                    unsafe { CStr::from_bytes_with_nul_unchecked(&buf[..]) },
+                ) {
+                    Ok(file) => {
+                        let metadata = file.metadata()?;
+                        if !metadata.is_dir() {
+                            return Ok(Node {
+                                file,
+                                metadata,
+                                auto_gzip: self.auto_gzip,
+                                is_gzipped: true,
+                            });
                         }
-                        Err(ref e) if e.kind() == ErrorKind::NotFound => {}
-                        Err(e) => return Err(e),
-                    };
-                    buf.truncate(path_len);
-                }
+                    }
+                    Err(ref e) if e.kind() == ErrorKind::NotFound => {}
+                    Err(e) => return Err(e),
+                };
+                buf.truncate(path_len);
+            }
 
-                buf.push(b'\0');
+            buf.push(b'\0');
 
-                // As in the case above, we've ensured buf contains exactly one NUL, at the end.
-                let p = unsafe { CStr::from_bytes_with_nul_unchecked(&buf[..]) };
-                let file = self_.open_file(p)?;
-                let metadata = file.metadata()?;
-                Ok(Node {
-                    file,
-                    metadata,
-                    auto_gzip: self_.auto_gzip,
-                    is_gzipped: false,
-                })
+            // As in the case above, we've ensured buf contains exactly one NUL, at the end.
+            let p = unsafe { CStr::from_bytes_with_nul_unchecked(&buf[..]) };
+            let file = self.open_file(p)?;
+            let metadata = file.metadata()?;
+            Ok(Node {
+                file,
+                metadata,
+                auto_gzip: self.auto_gzip,
+                is_gzipped: false,
             })
-            .unwrap_or_else(|e: tokio::task::JoinError| Err(Error::new(ErrorKind::Other, e))),
-        )
+        })
+        .await
+        .unwrap_or_else(|e: tokio::task::JoinError| Err(Error::new(ErrorKind::Other, e)))
     }
 
     /// Opens the given file with a path relative to this directory.
@@ -279,7 +276,7 @@ mod tests {
         let fsdir = FsDir::builder().for_path(tmp.path()).unwrap();
 
         for p in &["..", "../foo", "foo/../bar", "foo/.."] {
-            let e = match fsdir.get(p, &HeaderMap::new()).await {
+            let e = match Arc::clone(&fsdir).get(p, &HeaderMap::new()).await {
                 Ok(_) => panic!("should have failed"),
                 Err(e) => e,
             };

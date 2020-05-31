@@ -7,9 +7,9 @@ rust:
   - beta
   - 1.40.0
 script:
-  - cargo build --all
-  - cargo test --all
-  - cargo bench --all
+  - cargo build --all --features=dir
+  - cargo test --all --features=dir
+  - cargo bench --all --features=dir
 
 cache:
   cargo: true

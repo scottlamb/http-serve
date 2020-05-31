@@ -106,7 +106,7 @@ async fn serve(
         &req.uri().path()[1..]
     };
     // TODO: this should go through the same unwrapping.
-    let node = fs_dir.get(p, req.headers()).await?;
+    let node = Arc::clone(&fs_dir).get(p, req.headers()).await?;
     let e = match reply(req, node) {
         Ok(res) => return Ok(res),
         Err(e) => e,
