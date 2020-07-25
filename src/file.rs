@@ -182,7 +182,7 @@ mod tests {
     type BoxedError = Box<dyn std::error::Error + Sync + Send>;
     type CRF = ChunkedReadFile<Bytes, BoxedError>;
 
-    async fn to_bytes(s: Box<dyn Stream<Item = Result<Bytes, BoxedError>> + Send + Sync>) -> Bytes {
+    async fn to_bytes(s: Box<dyn Stream<Item = Result<Bytes, BoxedError>> + Send>) -> Bytes {
         hyper::body::to_bytes(hyper::Body::from(s)).await.unwrap()
     }
 

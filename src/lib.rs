@@ -153,7 +153,7 @@ fn parse_qvalue(s: &str) -> Result<u16, ()> {
         "1" | "1." | "1.0" | "1.00" | "1.000" => return Ok(1000),
         "0" | "0." => return Ok(0),
         s if !s.starts_with("0.") => return Err(()),
-        _ => {},
+        _ => {}
     };
     let v = &s[2..];
     let factor = match v.len() {
@@ -277,7 +277,7 @@ impl StreamingBodyBuilder {
     where
         D: From<Vec<u8>> + Send + Sync,
         E: Send + Sync,
-        P: From<Box<dyn Stream<Item = Result<D, E>> + Send + Sync>>,
+        P: From<Box<dyn Stream<Item = Result<D, E>> + Send>>,
     {
         let (w, stream) = chunker::BodyWriter::with_chunk_size(self.chunk_size);
         let mut resp = http::Response::new(stream.into());
