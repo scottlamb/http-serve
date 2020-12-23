@@ -38,9 +38,7 @@ fn new_server() -> String {
         let mut rt = tokio::runtime::Runtime::new().unwrap();
         let srv = rt.enter(|| {
             let addr = ([127, 0, 0, 1], 0).into();
-            hyper::server::Server::bind(&addr)
-                .tcp_nodelay(true)
-                .serve(make_svc)
+            hyper::Server::bind(&addr).tcp_nodelay(true).serve(make_svc)
         });
         let addr = srv.local_addr();
         tx.send(addr).unwrap();

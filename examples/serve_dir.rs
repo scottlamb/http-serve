@@ -130,7 +130,7 @@ async fn main() {
     let make_svc = make_service_fn(move |_conn| {
         futures::future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(dir, req)))
     });
-    let server = hyper::server::Server::bind(&addr).serve(make_svc);
+    let server = hyper::Server::bind(&addr).serve(make_svc);
     println!("Serving . on http://{} with 1 thread.", server.local_addr());
     server.await.unwrap();
 }

@@ -207,7 +207,7 @@ mod tests {
         hyper::body::to_bytes(hyper::Body::from(s)).await.unwrap()
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn basic() {
         tokio::spawn(async move {
             let tmp = tempfile::tempdir().unwrap();

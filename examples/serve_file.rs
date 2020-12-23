@@ -57,7 +57,7 @@ async fn main() -> Result<(), BoxedError> {
     let make_svc = make_service_fn(move |_conn| {
         futures::future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(ctx, req)))
     });
-    let server = hyper::server::Server::bind(&addr).serve(make_svc);
+    let server = hyper::Server::bind(&addr).serve(make_svc);
     println!(
         "Serving {} on http://{} with 1 thread.",
         ctx.path.to_string_lossy(),
