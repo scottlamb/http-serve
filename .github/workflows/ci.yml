@@ -1,0 +1,37 @@
+name: CI
+on: [push, pull_request]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: 1
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        rust:
+          - stable
+          - 1.40.0
+        os:
+          - ubuntu-20.04
+          - windows-latest
+    runs-on: ${{ matrix.os }}
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v2
+    - name: Cache
+      uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ matrix.os }}-${{ matrix.rust }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+    - name: Install Rust
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: minimal
+        toolchain: ${{ matrix.rust }}
+        override: true
+    - name: Test
+      run: cargo test --all --benches
