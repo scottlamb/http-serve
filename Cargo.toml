@@ -24,7 +24,6 @@ libc = "0.2.69"
 memchr = "2.0"
 mime = "0.3.7"
 smallvec = "1.4.0"
-time = { version = "0.2.1", default-features = false }
 tokio = { version = "0.2.4", features = ["blocking", "macros", "rt-threaded"] }
 
 [target.'cfg(windows)'.dependencies]
