@@ -281,7 +281,7 @@ impl StreamingBodyBuilder {
     where
         D: From<Vec<u8>> + Send + Sync,
         E: Send + Sync,
-        P: From<Box<dyn Stream<Item = Result<D, E>> + Send + Sync>>,
+        P: From<Box<dyn Stream<Item = Result<D, E>> + Send>>,
     {
         let (w, stream) = chunker::BodyWriter::with_chunk_size(self.chunk_size);
         let mut resp = http::Response::new(stream.into());

@@ -10,9 +10,6 @@ categories = ["web-programming::http-server"]
 repository = "https://github.com/scottlamb/http-serve"
 edition = "2018"
 
-[badges]
-travis-ci = { repository = "scottlamb/http-serve" }
-
 [features]
 dir = []
 

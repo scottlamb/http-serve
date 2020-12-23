@@ -41,7 +41,7 @@ where
 {
     pub(crate) fn with_chunk_size(
         cap: usize,
-    ) -> (Self, Box<dyn Stream<Item = Result<D, E>> + Send + Sync>) {
+    ) -> (Self, Box<dyn Stream<Item = Result<D, E>> + Send>) {
         assert!(cap > 0);
         let (snd, rcv) = mpsc::unbounded();
         let body = Box::new(rcv);
@@ -120,7 +120,7 @@ mod tests {
     use std::pin::Pin;
 
     type BoxedError = Box<dyn std::error::Error + 'static + Send + Sync>;
-    type BodyStream = Box<dyn Stream<Item = Result<Vec<u8>, BoxedError>> + Send + Sync>;
+    type BodyStream = Box<dyn Stream<Item = Result<Vec<u8>, BoxedError>> + Send>;
 
     async fn to_vec(s: BodyStream) -> Vec<u8> {
         Pin::from(s).try_concat().await.unwrap()

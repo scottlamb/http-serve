@@ -55,18 +55,18 @@ fn parse_modified_hdrs(
     Ok((precondition_failed, not_modified))
 }
 
-fn static_body<D, E>(s: &'static str) -> Box<dyn Stream<Item = Result<D, E>> + Send + Sync>
+fn static_body<D, E>(s: &'static str) -> Box<dyn Stream<Item = Result<D, E>> + Send>
 where
-    D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Sync,
+    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    E: 'static + Send,
 {
     Box::new(stream::once(futures::future::ok(s.as_bytes().into())))
 }
 
-fn empty_body<D, E>() -> Box<dyn Stream<Item = Result<D, E>> + Send + Sync>
+fn empty_body<D, E>() -> Box<dyn Stream<Item = Result<D, E>> + Send>
 where
-    D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Sync,
+    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    E: 'static + Send,
 {
     Box::new(stream::empty())
 }
@@ -77,7 +77,7 @@ where
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
 pub fn serve<
     Ent: Entity,
-    B: Body + From<Box<dyn Stream<Item = Result<Ent::Data, Ent::Error>> + Send + Sync>>,
+    B: Body + From<Box<dyn Stream<Item = Result<Ent::Data, Ent::Error>> + Send>>,
     BI,
 >(
     entity: Ent,
@@ -97,8 +97,7 @@ pub fn serve<
                 next_multipart_body_chunk(state, &entity, &ranges[..], &mut part_headers[..])
             });
             let body = bodies.flatten();
-            let body: Box<dyn Stream<Item = Result<Ent::Data, Ent::Error>> + Send + Sync> =
-                Box::new(body);
+            let body: Box<dyn Stream<Item = Result<Ent::Data, Ent::Error>> + Send> = Box::new(body);
             res.body(body.into()).unwrap()
         }
     }
@@ -118,7 +117,7 @@ enum ServeInner<B> {
 fn serve_inner<
     D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
     E: 'static + Send + Sync,
-    B: Body + From<Box<dyn Stream<Item = Result<D, E>> + Send + Sync>>,
+    B: Body + From<Box<dyn Stream<Item = Result<D, E>> + Send>>,
     BI,
 >(
     ent: &dyn Entity<Error = E, Data = D>,
