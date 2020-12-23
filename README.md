@@ -1,7 +1,7 @@
 # http-serve
 
 [![crates.io](https://meritbadge.herokuapp.com/http-serve)](https://crates.io/crates/http-serve)
-[![CI](https://github.com/scottlamb/http-serve/workflows/ci/badge.svg)](https://github.com/scottlamb/http-serve/actions?query=workflow%3ACI)
+[![CI](https://github.com/scottlamb/http-serve/workflows/CI/badge.svg)](https://github.com/scottlamb/http-serve/actions?query=workflow%3ACI)
 
 Rust helpers for serving HTTP GET and HEAD responses with
 [hyper](https://crates.io/crates/hyper) 0.13.x and
