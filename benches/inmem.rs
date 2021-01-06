@@ -120,11 +120,11 @@ fn new_server() -> SocketAddr {
         let make_svc = hyper::service::make_service_fn(|_conn| {
             futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
         });
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
-        let srv = rt.enter(|| {
-            let addr = ([127, 0, 0, 1], 0).into();
-            hyper::Server::bind(&addr).tcp_nodelay(true).serve(make_svc)
-        });
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+
+        let addr = ([127, 0, 0, 1], 0).into();
+        let srv = hyper::Server::bind(&addr).tcp_nodelay(true).serve(make_svc);
         let addr = srv.local_addr();
         tx.send(addr).unwrap();
         rt.block_on(srv).unwrap();
