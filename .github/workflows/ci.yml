@@ -11,11 +11,11 @@ jobs:
       matrix:
         rust:
           - stable
-          - 1.40.0
+          - 1.45.0
         os:
           - ubuntu-20.04
           - windows-latest
-        # The dir feature requires a POsIX system (not Windows).
+        # The dir feature requires a POSIX system (not Windows).
         include:
           - os: ubuntu-20.04
             features: "--features dir"
