@@ -10,8 +10,8 @@ use super::Entity;
 use crate::etag;
 use crate::range;
 use bytes::Buf;
-use futures::stream::{self, StreamExt};
-use futures::{self, Stream};
+use futures_core::Stream;
+use futures_util::stream::{self, StreamExt};
 use http::header::{self, HeaderMap, HeaderValue};
 use http::{self, Method, Request, Response, StatusCode};
 use http_body::Body;
@@ -60,7 +60,7 @@ where
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
     E: 'static + Send,
 {
-    Box::new(stream::once(futures::future::ok(s.as_bytes().into())))
+    Box::new(stream::once(futures_util::future::ok(s.as_bytes().into())))
 }
 
 fn empty_body<D, E>() -> Box<dyn Stream<Item = Result<D, E>> + Send>
@@ -93,7 +93,7 @@ pub fn serve<
             mut part_headers,
             ranges,
         } => {
-            let bodies = futures::stream::unfold(0, move |state| {
+            let bodies = stream::unfold(0, move |state| {
                 next_multipart_body_chunk(state, &entity, &ranges[..], &mut part_headers[..])
             });
             let body = bodies.flatten();
@@ -287,7 +287,7 @@ impl<D, E> Stream for InnerBody<D, E> {
     type Item = Result<D, E>;
     fn poll_next(
         self: Pin<&mut Self>,
-        ctx: &mut futures::task::Context,
+        ctx: &mut std::task::Context,
     ) -> std::task::Poll<Option<Result<D, E>>> {
         // This is safe because the fields are not structurally pinned.
         // https://doc.rust-lang.org/std/pin/#pinning-is-not-structural-for-field
@@ -382,7 +382,7 @@ where
     let i = state >> 1;
     let odd = (state & 1) == 1;
     let body = if i == ranges.len() && odd {
-        return futures::future::ready(None);
+        return futures_util::future::ready(None);
     } else if i == ranges.len() {
         InnerBody::Once(Some(PART_TRAILER.into()))
     } else if odd {
@@ -391,5 +391,5 @@ where
         let v = std::mem::replace(&mut part_headers[i], Vec::new());
         InnerBody::Once(Some(v.into()))
     };
-    futures::future::ready(Some((body, state + 1)))
+    futures_util::future::ready(Some((body, state + 1)))
 }

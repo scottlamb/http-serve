@@ -13,8 +13,8 @@ use bytes::{Bytes, BytesMut};
 use criterion::{
     criterion_group, criterion_main, Benchmark, Criterion, ParameterizedBenchmark, Throughput,
 };
-use futures::Stream;
-use futures::{future, stream};
+use futures_core::Stream;
+use futures_util::{future, stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
 use http_serve::streaming_body;
@@ -118,7 +118,7 @@ fn new_server() -> SocketAddr {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let make_svc = hyper::service::make_service_fn(|_conn| {
-            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+            futures_util::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
         });
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();

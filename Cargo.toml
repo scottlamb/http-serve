@@ -16,7 +16,9 @@ dir = []
 [dependencies]
 bytes = "1.0"
 flate2 = "1.0.1"
-futures = "0.3.1"
+futures-channel = { version = "0.3.1", default-features = false }
+futures-core = { version = "0.3.1", default-features = false }
+futures-util = { version = "0.3.1", default-features = false }
 http = "0.2.0"
 http-body = "0.4"
 httpdate = "0.3.2"

@@ -8,7 +8,8 @@
 
 use crate::platform::{self, FileExt};
 use bytes::Buf;
-use futures::Stream;
+use futures_core::Stream;
+use futures_util::stream;
 use http::header::{HeaderMap, HeaderValue};
 use std::error::Error as StdError;
 use std::io;
@@ -115,7 +116,7 @@ where
         &self,
         range: Range<u64>,
     ) -> Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync> {
-        let stream = futures::stream::unfold(
+        let stream = stream::unfold(
             (range, Arc::clone(&self.inner)),
             move |(left, inner)| async {
                 if left.start == left.end {
@@ -195,7 +196,7 @@ mod tests {
     use super::ChunkedReadFile;
     use super::Entity;
     use bytes::Bytes;
-    use futures::stream::Stream;
+    use futures_core::Stream;
     use http::header::HeaderMap;
     use std::fs::File;
     use std::io::Write;

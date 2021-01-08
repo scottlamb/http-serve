@@ -33,7 +33,7 @@ fn new_server() -> String {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let make_svc = hyper::service::make_service_fn(|_conn| {
-            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+            futures_util::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
         });
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
