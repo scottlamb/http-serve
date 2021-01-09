@@ -38,4 +38,4 @@ jobs:
         toolchain: ${{ matrix.rust }}
         override: true
     - name: Test
-      run: cargo test ${{ matrix.features }} --all --benches
+      run: cargo test ${{ matrix.features }} --all-targets
