@@ -64,7 +64,7 @@
 //! `http_body::Body` trait which uses a different `Data` type than `hyper::Chunk`.
 
 use bytes::Buf;
-use futures::Stream;
+use futures_core::Stream;
 use http::header::{self, HeaderMap, HeaderValue};
 use std::ops::Range;
 use std::str::FromStr;

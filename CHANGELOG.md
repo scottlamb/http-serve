@@ -1,3 +1,8 @@
+# 0.3.0
+
+* BREAKING CHANGE: update to hyper 0.14, tokio 1.0, bytes 1.0.
+* BREAKING CHANGE: bump minimum Rust version to 1.45.
+
 # 0.2.2
 
 * Don't panic on unparseable `Range` header values.

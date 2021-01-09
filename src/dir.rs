@@ -258,7 +258,7 @@ fn validate_path(path: &str) -> Result<(), &'static str> {
 mod tests {
     use super::*;
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn path_with_interior_nul() {
         let tmp = tempfile::tempdir().unwrap();
         let fsdir = FsDir::builder().for_path(tmp.path()).unwrap();
@@ -270,7 +270,7 @@ mod tests {
         assert_eq!(e.to_string(), "path contains NUL byte");
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn path_with_parent_dir_segment() {
         let tmp = tempfile::tempdir().unwrap();
         let fsdir = FsDir::builder().for_path(tmp.path()).unwrap();
@@ -285,7 +285,7 @@ mod tests {
         }
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn absolute_path() {
         let tmp = tempfile::tempdir().unwrap();
         let fsdir = FsDir::builder().for_path(tmp.path()).unwrap();
@@ -297,7 +297,7 @@ mod tests {
         assert_eq!(e.to_string(), "path is absolute");
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn regular_file() {
         let tmp = tempfile::tempdir().unwrap();
         tokio::spawn(async move {
@@ -316,7 +316,7 @@ mod tests {
         .unwrap()
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn missing_file() {
         let tmp = tempfile::tempdir().unwrap();
         tokio::spawn(async move {
@@ -330,7 +330,7 @@ mod tests {
         .unwrap()
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn symlink_allowed_in_last_path_component() {
         let tmp = tempfile::tempdir().unwrap();
         tokio::spawn(async move {
@@ -342,7 +342,7 @@ mod tests {
         .unwrap()
     }
 
-    #[tokio::test(threaded_scheduler)]
+    #[tokio::test(flavor = "multi_thread")]
     async fn symlink_allowed_in_earlier_path_component() {
         let tmp = tempfile::tempdir().unwrap();
         tokio::spawn(async move {

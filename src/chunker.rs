@@ -6,8 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use futures::channel::mpsc;
-use futures::Stream;
+use futures_channel::mpsc;
+use futures_core::Stream;
 use std::io::{self, Write};
 use std::mem;
 
@@ -115,7 +115,8 @@ where
 #[cfg(test)]
 mod tests {
     use super::BodyWriter;
-    use futures::{stream::StreamExt, stream::TryStreamExt, Stream};
+    use futures_core::Stream;
+    use futures_util::{stream::StreamExt, stream::TryStreamExt};
     use std::io::Write;
     use std::pin::Pin;
 

@@ -33,15 +33,13 @@ fn new_server() -> String {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let make_svc = hyper::service::make_service_fn(|_conn| {
-            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+            futures_util::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
         });
-        let mut rt = tokio::runtime::Runtime::new().unwrap();
-        let srv = rt.enter(|| {
-            let addr = ([127, 0, 0, 1], 0).into();
-            hyper::server::Server::bind(&addr)
-                .tcp_nodelay(true)
-                .serve(make_svc)
-        });
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let _guard = rt.enter();
+
+        let addr = ([127, 0, 0, 1], 0).into();
+        let srv = hyper::Server::bind(&addr).tcp_nodelay(true).serve(make_svc);
         let addr = srv.local_addr();
         tx.send(addr).unwrap();
         rt.block_on(srv).unwrap();
@@ -73,7 +71,7 @@ fn setup(kib: usize) -> TempDir {
 fn serve_full_entity(b: &mut criterion::Bencher, kib: &usize) {
     let _tmpdir = setup(*kib);
     let client = reqwest::Client::new();
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
     b.iter(|| {
         rt.block_on(async {
             let resp = client.get(&*SERVER).send().await.unwrap();
@@ -87,7 +85,7 @@ fn serve_full_entity(b: &mut criterion::Bencher, kib: &usize) {
 fn serve_last_byte_1mib(b: &mut criterion::Bencher) {
     let _tmpdir = setup(1024);
     let client = reqwest::Client::new();
-    let mut rt = tokio::runtime::Runtime::new().unwrap();
+    let rt = tokio::runtime::Runtime::new().unwrap();
     b.iter(|| {
         rt.block_on(async {
             let resp = client
