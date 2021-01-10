@@ -6,7 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use futures::{stream, Stream};
+use futures_core::Stream;
+use futures_util::{future, stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
 use hyper::body::Body;
@@ -37,7 +38,7 @@ impl http_serve::Entity for &'static FakeEntity {
         &self,
         range: Range<u64>,
     ) -> Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync> {
-        Box::new(stream::once(futures::future::ok(
+        Box::new(stream::once(future::ok(
             BODY[range.start as usize..range.end as usize].into(),
         )))
     }
@@ -69,7 +70,7 @@ fn new_server() -> String {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let make_svc = hyper::service::make_service_fn(|_conn| {
-            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+            future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
         });
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();

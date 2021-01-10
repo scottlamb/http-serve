@@ -19,6 +19,7 @@
 //! ```
 
 use bytes::Bytes;
+use futures_util::future;
 use http::{Request, Response};
 use http_serve::ChunkedReadFile;
 use hyper::service::{make_service_fn, service_fn};
@@ -55,7 +56,7 @@ async fn main() -> Result<(), BoxedError> {
     env_logger::init();
     let addr = ([127, 0, 0, 1], 1337).into();
     let make_svc = make_service_fn(move |_conn| {
-        futures::future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(ctx, req)))
+        future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(ctx, req)))
     });
     let server = hyper::Server::bind(&addr).serve(make_svc);
     println!(

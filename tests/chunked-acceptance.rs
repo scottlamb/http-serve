@@ -6,8 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use futures::channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
-use futures::StreamExt;
+use futures_channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
+use futures_util::{future, StreamExt};
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::io::{self, Write};
@@ -25,7 +25,7 @@ async fn serve(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::
             Cmd::Abort(e) => w.abort(e),
             Cmd::Flush => w.flush().unwrap(),
         }
-        futures::future::ready(())
+        future::ready(())
     }));
     Ok(resp)
 }
@@ -45,7 +45,7 @@ fn new_server() -> Server {
     let (server_tx, server_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
         let make_svc = hyper::service::make_service_fn(|_conn| {
-            futures::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
+            future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
         });
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
