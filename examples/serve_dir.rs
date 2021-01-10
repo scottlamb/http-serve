@@ -9,6 +9,7 @@
 //! Test program which serves the current directory on `http://127.0.0.1:1337/`.
 //! Note this requires `--features dir`.
 
+use futures_util::future;
 use http::header::{self, HeaderMap, HeaderValue};
 use http_serve::dir;
 use hyper::service::{make_service_fn, service_fn};
@@ -88,7 +89,7 @@ fn reply(
     node.add_encoding_headers(&mut h);
     if let Some(dot) = req.uri().path().rfind('.') {
         let ext = &req.uri().path()[dot + 1..];
-        if let Some(mime_type) = mime_guess::get_mime_type_str(ext) {
+        if let Some(mime_type) = mime_guess::from_ext(ext).first_raw() {
             h.insert(header::CONTENT_TYPE, HeaderValue::from_static(mime_type));
         }
     }
@@ -128,7 +129,7 @@ async fn main() {
     env_logger::init();
     let addr = ([127, 0, 0, 1], 1337).into();
     let make_svc = make_service_fn(move |_conn| {
-        futures::future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(dir, req)))
+        future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(dir, req)))
     });
     let server = hyper::Server::bind(&addr).serve(make_svc);
     println!("Serving . on http://{} with 1 thread.", server.local_addr());
