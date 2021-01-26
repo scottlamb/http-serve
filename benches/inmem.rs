@@ -10,9 +10,7 @@
 //! `serve` function on an `Entity` and the `streaming_body` method.
 
 use bytes::{Bytes, BytesMut};
-use criterion::{
-    criterion_group, criterion_main, Benchmark, Criterion, ParameterizedBenchmark, Throughput,
-};
+use criterion::{criterion_group, criterion_main, Criterion, Throughput};
 use futures_core::Stream;
 use futures_util::{future, stream};
 use http::header::HeaderValue;
@@ -222,27 +220,15 @@ fn get(b: &mut criterion::Bencher, path: &str) {
 }
 
 fn criterion_benchmark(c: &mut Criterion) {
-    c.bench(
-        "serve",
-        Benchmark::new("static", |b| get(b, "s"))
-            .throughput(Throughput::Bytes(WONDERLAND.len() as u64)),
-    );
-    c.bench(
-        "serve",
-        Benchmark::new("copied", |b| get(b, "c"))
-            .throughput(Throughput::Bytes(WONDERLAND.len() as u64)),
-    );
-    c.bench(
-        "streaming_body_before",
-        ParameterizedBenchmark::new("gzip", |b, p| get(b, &format!("b4096:{}", p)), 0..=9)
-            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u64)),
-    );
-    c.bench(
-        "streaming_body_after",
-        ParameterizedBenchmark::new("gzip", |b, p| get(b, &format!("a4096:{}", p)), 0..=9)
-            .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u64)),
-    );
+    let mut g = c.benchmark_group("serve");
+    g.throughput(Throughput::Bytes(WONDERLAND.len() as u64));
+    g.bench_function("static", |b| get(b, "s"));
+    g.bench_function("copied", |b| get(b, "c"));
+    g.finish();
 
+    // Streaming body benchmarks. In variants with the data written "before" and "after" response,
+    // try every gzip level.
+    //
     // Also benchmark larger chunksizes, but only with gzip level 0 (disabled). The chunk size
     // difference is dwarfed by gzip overhead. When not gzipping, it makes a noticeable difference,
     // probably for two reasons:
@@ -252,30 +238,38 @@ fn criterion_benchmark(c: &mut Criterion) {
     //   call, chunks must be at least 1/16th of the total file size.
     //
     // * more memory allocations.
-    c.bench(
-        "streaming_body_before",
-        ParameterizedBenchmark::new(
-            "chunksize",
-            |b, p| get(b, &format!("b{}:0", p)),
-            &[4096, 16384, 65536, 1048576],
-        )
-        .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u64)),
-    );
-    c.bench(
-        "streaming_body_after",
-        ParameterizedBenchmark::new(
-            "chunksize",
-            |b, p| get(b, &format!("a{}:0", p)),
-            &[4096, 16384, 65536, 1048576],
-        )
-        .throughput(|_| Throughput::Bytes(WONDERLAND.len() as u64)),
-    );
+    let mut g = c.benchmark_group("streaming_body_before");
+    g.throughput(Throughput::Bytes(WONDERLAND.len() as u64));
+    for l in 0..=9 {
+        g.bench_with_input(format!("gzip/{}", l), &l, |b, p| {
+            get(b, &format!("b4096:{}", p))
+        });
+    }
+    for c in &[4096, 16384, 65536, 1048576] {
+        g.bench_with_input(format!("chunksize/{}", c), c, |b, p| {
+            get(b, &format!("b{}:0", p))
+        });
+    }
+    g.finish();
+    let mut g = c.benchmark_group("streaming_body_after");
+    g.throughput(Throughput::Bytes(WONDERLAND.len() as u64));
+    for l in 0..=9 {
+        g.bench_with_input(format!("gzip/{}", l), &l, |b, p| {
+            get(b, &format!("a4096:{}", p))
+        });
+    }
+    for c in &[4096, 16384, 65536, 1048576] {
+        g.bench_with_input(format!("chunksize/{}", c), c, |b, p| {
+            get(b, &format!("a{}:0", p))
+        });
+    }
+    g.finish();
 }
 
 criterion_group! {
     name = benches;
 
-    // Tweak the config to run more quickly; there are a lot of bench cases here.
+    // Tweak the config to run more quickly; http-serve has many bench cases.
     config = Criterion::default()
         .sample_size(10)
         .warm_up_time(Duration::from_millis(100))
