@@ -171,13 +171,10 @@ where
             .duration_since(time::UNIX_EPOCH)
             .expect("modification time must be after epoch");
 
-        // Rust doesn't seem to understand these lengths are used in the macro invocation.
-        #[allow(dead_code)]
         static HEX_U64_LEN: usize = 16;
-        #[allow(dead_code)]
-        static HEX_U32_LEN: usize = 16;
+        static HEX_U32_LEN: usize = 8;
         Some(unsafe_fmt_ascii_val!(
-            HEX_U64_LEN * 3 + HEX_U64_LEN + 5,
+            HEX_U64_LEN * 3 + HEX_U32_LEN + 5,
             "\"{:x}:{:x}:{:x}:{:x}\"",
             self.inner.inode,
             self.inner.len,
