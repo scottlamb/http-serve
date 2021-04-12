@@ -84,11 +84,7 @@ impl FsDir {
     ///
     /// Validates that `path` has no `..` segments or interior NULs. Currently doesn't check for
     /// symlinks, however. That may eventually be configurable via the builder.
-    pub async fn get(
-        self: Arc<Self>,
-        path: &str,
-        req_hdrs: &HeaderMap,
-    ) -> Result<Node, Error> {
+    pub async fn get(self: Arc<Self>, path: &str, req_hdrs: &HeaderMap) -> Result<Node, Error> {
         if let Err(e) = validate_path(path) {
             return Err(Error::new(ErrorKind::InvalidInput, e));
         }
