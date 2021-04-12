@@ -19,6 +19,8 @@ jobs:
         include:
           - os: ubuntu-20.04
             features: "--features dir"
+          - rust: stable
+            extra_components: rustfmt
     runs-on: ${{ matrix.os }}
     steps:
     - name: Checkout
@@ -37,5 +39,9 @@ jobs:
         profile: minimal
         toolchain: ${{ matrix.rust }}
         override: true
+        components: ${{ matrix.extra_components }}
     - name: Test
       run: cargo test ${{ matrix.features }} --all-targets
+    - name: Check formatting
+      if: matrix.rust == 'stable'
+      run: cargo fmt -- --check
