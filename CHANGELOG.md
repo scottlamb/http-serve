@@ -1,11 +1,12 @@
 # 0.3.1 (unreleased)
 
+* Bump minimum Rust version to 1.46.
 * Remove an `unsafe` block via the `pin-project` library.
 
 # 0.3.0
 
 * BREAKING CHANGE: update to hyper 0.14, tokio 1.0, bytes 1.0.
-* BREAKING CHANGE: bump minimum Rust version to 1.45.
+* Bump minimum Rust version to 1.45.
 * Add new `dir` module for local filesystem directory traversal on Unix.
 
 # 0.2.2

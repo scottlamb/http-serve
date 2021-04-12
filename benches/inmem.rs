@@ -149,11 +149,11 @@ fn get(b: &mut criterion::Bencher, path: &str) {
     let mut buf = vec![0u8; WONDERLAND.len() + 8192];
 
     use socket2::{Domain, Socket, Type};
-    let s = Socket::new(Domain::ipv4(), Type::stream(), None).unwrap();
+    let s = Socket::new(Domain::IPV4, Type::STREAM, None).unwrap();
     s.set_reuse_address(true).unwrap();
     s.set_nodelay(true).unwrap();
     s.connect(&(*SERVER).into()).unwrap();
-    let mut s = s.into_tcp_stream();
+    let mut s: std::net::TcpStream = s.into();
     b.iter(move || {
         s.write_all(&v[..]).unwrap();
 
