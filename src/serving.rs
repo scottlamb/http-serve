@@ -16,6 +16,7 @@ use http::header::{self, HeaderMap, HeaderValue};
 use http::{self, Method, Request, Response, StatusCode};
 use http_body::Body;
 use httpdate::{fmt_http_date, parse_http_date};
+use pin_project::pin_project;
 use smallvec::SmallVec;
 use std::future::Future;
 use std::io::Write;
@@ -278,8 +279,11 @@ fn serve_inner<
 
 /// A body for use in the "stream of streams" (see `prepare_multipart` and its call site).
 /// This avoids an extra allocation for the part headers and overall trailer.
+#[pin_project(project=InnerBodyProj)]
 enum InnerBody<D, E> {
     Once(Option<D>),
+
+    // The box variant _holds_ a pin but isn't structurally pinned.
     B(Pin<Box<dyn Stream<Item = Result<D, E>> + Sync + Send>>),
 }
 
@@ -289,12 +293,10 @@ impl<D, E> Stream for InnerBody<D, E> {
         self: Pin<&mut Self>,
         ctx: &mut std::task::Context,
     ) -> std::task::Poll<Option<Result<D, E>>> {
-        // This is safe because the fields are not structurally pinned.
-        // https://doc.rust-lang.org/std/pin/#pinning-is-not-structural-for-field
-        // (In the B variant, the field _holds_ a pin, but it isn't itself pinned.)
-        match unsafe { self.get_unchecked_mut() } {
-            InnerBody::Once(ref mut o) => std::task::Poll::Ready(o.take().map(|d| Ok(d))),
-            InnerBody::B(b) => b.as_mut().poll_next(ctx),
+        let mut this = self.project();
+        match this {
+            InnerBodyProj::Once(ref mut o) => std::task::Poll::Ready(o.take().map(|d| Ok(d))),
+            InnerBodyProj::B(b) => b.as_mut().poll_next(ctx),
         }
     }
 }

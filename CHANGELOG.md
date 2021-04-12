@@ -1,3 +1,7 @@
+# 0.3.1 (unreleased)
+
+* Remove an `unsafe` block via the `pin-project` library.
+
 # 0.3.0
 
 * BREAKING CHANGE: update to hyper 0.14, tokio 1.0, bytes 1.0.

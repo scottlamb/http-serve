@@ -471,7 +471,7 @@ dependencies = [
 
 [[package]]
 name = "http-serve"
-version = "0.3.0"
+version = "0.3.1-pre"
 dependencies = [
  "bytes 1.0.0",
  "criterion",
@@ -492,6 +492,7 @@ dependencies = [
  "mime_guess",
  "nix",
  "once_cell",
+ "pin-project 0.4.27",
  "reqwest",
  "smallvec",
  "socket2",
