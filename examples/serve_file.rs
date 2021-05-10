@@ -11,8 +11,8 @@
 //! Performs file IO on a separate thread pool from the reactor so that it doesn't block on
 //! local disk. Supports HEAD, conditional GET, and byte range requests. Some commands to try:
 //!
-//! ```
-//! $ curl --head http://127.0.0.1/
+//! ```text
+//! $ curl --head http://127.0.0.1:1337/
 //! $ curl http://127.0.0.1:1337 > /dev/null
 //! $ curl -v -H 'Range: bytes=1-10' http://127.0.0.1:1337/
 //! $ curl -v -H 'Range: bytes=1-10,30-40' http://127.0.0.1:1337/
