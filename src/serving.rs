@@ -189,9 +189,9 @@ fn serve_inner<
         // Last-Modified must not exceed the Date. To guarantee this, set the Date now rather than
         // let hyper set it.
         let d = SystemTime::now();
-        res = res.header(header::DATE, &*fmt_http_date(d));
+        res = res.header(header::DATE, fmt_http_date(d));
         let clamped_m = std::cmp::min(m, d);
-        res = res.header(header::LAST_MODIFIED, &*fmt_http_date(clamped_m));
+        res = res.header(header::LAST_MODIFIED, fmt_http_date(clamped_m));
     }
     if let Some(e) = etag {
         res = res.header(http::header::ETAG, e);
