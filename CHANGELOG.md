@@ -1,7 +1,8 @@
-# 0.3.1 (unreleased)
+# 0.3.1
 
 * Bump minimum Rust version to 1.46.
 * Remove an `unsafe` block via the `pin-project` library.
+* Fix references to old hyper versions in documentation.
 
 # 0.3.0
 
