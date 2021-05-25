@@ -16,9 +16,9 @@
 //!     byte-rangeable HTTP entities. `Entity` must be able to produce exactly the same data on
 //!     every call, know its size in advance, and be able to produce portions of the data on demand.
 //! *   the `streaming_body` function can be used to add a body to an otherwise-complete response.
-//!     If a body is needed, it returns a `BodyWriter` (which implements `std::io::Writer`). The
-//!     caller should produce the complete body or call `BodyWriter::abort`, causing the HTTP
-//!     stream to terminate abruptly.
+//!     If a body is needed (on `GET` rather than `HEAD` requests), it returns a `BodyWriter`
+//!     (which implements `std::io::Writer`). The caller should produce the complete body or call
+//!     `BodyWriter::abort`, causing the HTTP stream to terminate abruptly.
 //!
 //! # Why two ways?
 //!
@@ -26,12 +26,26 @@
 //!
 //! <table>
 //!   <tr><th><th><code>serve</code><th><code>streaming_body</code></tr>
-//!   <tr><td>automatic byte range serving<td>yes<td>no (always sends full body)</tr>
-//!   <tr><td>backpressure<td>yes<td>no</tr>
-//!   <tr><td>conditional GET<td>yes<td>unimplemented (always sends body)</tr>
+//!   <tr><td>automatic byte range serving<td>yes<td>no [<a href="#range">1</a>]</tr>
+//!   <tr><td>backpressure<td>yes<td>no [<a href="#backpressure">2</a>]</tr>
+//!   <tr><td>conditional GET<td>yes<td>no [<a href="#conditional_get">3</a>]</tr>
 //!   <tr><td>sends first byte before length known<td>no<td>yes</tr>
 //!   <tr><td>automatic gzip content encoding<td>no<td>yes</tr>
 //! </table>
+//!
+//! <a name="range">\[1\]</a>: `streaming_body` always sends the full body. Byte range serving
+//! wouldn't make much sense with its interface. The application will generate all the bytes
+//! every time anyway, and `http-serve`'s buffering logic would have to be complex
+//! to handle multiple ranges well.
+//!
+//! <a name="backpressure">\[2\]</a>: `streaming_body` is often appended to while holding
+//! a lock or open database transaction, where backpressure is undesired. It'd be
+//! possible to add support for "wait points" where the caller explicitly wants backpressure. This
+//! would make it more suitable for large streams, even infinite streams like
+//! [Server-sent events](https://developer.mozilla.org/en-US/docs/Web/API/Server-sent_events).
+//!
+//! <a name="conditional_get">\[3\]</a>: `streaming_body` doesn't yet support
+//! generating etags or honoring conditional GET requests. PRs welcome!
 //!
 //! Use `serve` when:
 //!
@@ -41,7 +55,7 @@
 //!     create a pair of buffers for gzipped (for user-agents which specify `Accept-Encoding:
 //!     gzip`) vs raw.
 //!
-//! Consider `streaming_body` if the entire body is fully regenerated each time a response is sent.
+//! Use `streaming_body` when regenerating the entire body each time a response is sent.
 //!
 //! Once you return a `hyper::server::Response` to hyper, your only way to signal error to the
 //! client is to abruptly close the HTTP connection while sending the body. If you want the ability
