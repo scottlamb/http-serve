@@ -120,7 +120,7 @@ async fn abort(path: &'static str, auto_gzip: bool) {
 
     // This is fragile, but I don't see a better way to check that the error is as expected.
     let e = format!("{:?}", resp.chunk().await.unwrap_err());
-    assert!(e.contains("UnexpectedEof"), e);
+    assert!(e.contains("UnexpectedEof"), "{}", e);
 }
 
 #[tokio::test]
