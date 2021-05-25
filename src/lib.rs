@@ -266,6 +266,7 @@ pub fn should_gzip(headers: &HeaderMap) -> bool {
     gzip_q > 0 && gzip_q >= identity_q
 }
 
+/// A builder returned by [streaming_body].
 pub struct StreamingBodyBuilder {
     chunk_size: usize,
     gzip_level: u32,
@@ -273,11 +274,51 @@ pub struct StreamingBodyBuilder {
     body_needed: bool,
 }
 
-/// Adds a streaming body to the given request if a body is needed.
+
+/// Creates a response and streaming body writer for the given request.
 ///
-/// Currently the body is added for non-HEAD requests. In the future, this may also follow
-/// conditional GET rules, omitting the body and stripping out entity headers from the response as
-/// desired.
+/// The streaming body writer is currently `Some(writer)` for `GET` requests and
+/// `None` for `HEAD` requests. In the future, `streaming_body` may also support
+/// conditional `GET` requests.
+///
+/// ```
+/// # use http::{Request, Response, header::{self, HeaderValue}};
+/// use std::io::Write as _;
+///
+/// fn respond(req: Request<hyper::Body>) -> std::io::Result<Response<hyper::Body>> {
+///     let (mut resp, stream) = http_serve::streaming_body(&req).build();
+///     if let Some(mut w) = stream {
+///         write!(&mut w, "hello world")?;
+///     }
+///     resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+///     Ok(resp)
+/// }
+/// ```
+///
+/// The caller may also continue appending to `stream` after returning the response to `hyper`.
+/// The response will end when `stream` is dropped. The only disadvantage to writing to the stream
+/// after the fact is that there's no way to report mid-response errors other than abruptly closing
+/// the TCP connection ([BodyWriter::abort]).
+///
+/// ```
+/// # use http::{Request, Response, header::{self, HeaderValue}};
+/// use std::io::Write as _;
+///
+/// fn respond(req: Request<hyper::Body>) -> std::io::Result<Response<hyper::Body>> {
+///     let (mut resp, stream) = http_serve::streaming_body(&req).build();
+///     if let Some(mut w) = stream {
+///         tokio::spawn(async move {
+///             for i in 0..10 {
+///                 tokio::time::sleep(std::time::Duration::from_secs(1)).await;
+///                 write!(&mut w, "write {}\n", i)?;
+///             }
+///             Ok::<_, std::io::Error>(())
+///         });
+///     }
+///     resp.headers_mut().insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+///     Ok(resp)
+/// }
+/// ```
 pub fn streaming_body<T>(req: &http::Request<T>) -> StreamingBodyBuilder {
     StreamingBodyBuilder {
         chunk_size: 4096,
@@ -296,7 +337,7 @@ impl StreamingBodyBuilder {
         StreamingBodyBuilder { chunk_size, ..self }
     }
 
-    /// Sets the gzip compression level.
+    /// Sets the gzip compression level. Defaults to 6.
     ///
     /// `gzip_level` should be an integer between 0 and 9 (inclusive).
     /// 0 means no compression; 9 gives the best compression (but most CPU usage).
@@ -306,6 +347,7 @@ impl StreamingBodyBuilder {
         StreamingBodyBuilder { gzip_level, ..self }
     }
 
+    /// Returns the HTTP response and, if the request is a `GET`, a body writer.
     pub fn build<P, D, E>(self) -> (http::Response<P>, Option<BodyWriter<D, E>>)
     where
         D: From<Vec<u8>> + Send + Sync,

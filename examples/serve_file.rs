@@ -20,7 +20,7 @@
 
 use bytes::Bytes;
 use futures_util::future;
-use http::{Request, Response};
+use http::{Request, Response, header::{self, HeaderMap, HeaderValue}};
 use http_serve::ChunkedReadFile;
 use hyper::service::{make_service_fn, service_fn};
 use hyper::Body;
@@ -35,7 +35,10 @@ async fn serve(ctx: &'static Context, req: Request<Body>) -> Result<Response<Bod
     let f = tokio::task::block_in_place::<_, Result<ChunkedReadFile<Bytes, BoxedError>, BoxedError>>(
         move || {
             let f = std::fs::File::open(&ctx.path)?;
-            let headers = http::header::HeaderMap::new();
+            let mut headers = HeaderMap::new();
+            headers.insert(
+                header::CONTENT_TYPE,
+                HeaderValue::from_static("application/octet-stream"));
             Ok(ChunkedReadFile::new(f, headers)?)
         },
     )?;

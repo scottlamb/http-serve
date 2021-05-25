@@ -58,6 +58,7 @@ where
     }
 
     /// Causes the HTTP connection to be dropped abruptly.
+    /// The actual value of `error` is mostly irrelevant, although hyper may choose to log it.
     pub fn abort(&mut self, error: E) {
         match mem::replace(&mut self.0, Inner::Dead) {
             Inner::Dead => (),
@@ -86,7 +87,7 @@ where
 
     fn flush(&mut self) -> io::Result<()> {
         let r = match self.0 {
-            Inner::Dead => Err(io::Error::new(io::ErrorKind::BrokenPipe, "body is dead"))?,
+            Inner::Dead => return Err(io::Error::new(io::ErrorKind::BrokenPipe, "body is dead")),
             Inner::Raw(ref mut w) => w.flush(),
             Inner::Gzipped(ref mut w) => w.flush(),
         };

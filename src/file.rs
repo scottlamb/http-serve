@@ -23,10 +23,30 @@ use crate::Entity;
 // a tradeoff between memory usage and thread handoffs.
 static CHUNK_SIZE: u64 = 65_536;
 
-/// A HTTP entity created from a `std::fs::File` which reads the file chunk-by-chunk within
-/// a `tokio::task::block_in_place` closure.
+/// HTTP entity created from a [`std::fs::File`] which reads the file chunk-by-chunk within
+/// a [`tokio::task::block_in_place`] closure.
 ///
-/// Expects to be used from a tokio threadpool.
+/// `ChunkedReadFile` is cheap to clone and reuse for many requests.
+///
+/// Expects to be served from a tokio threadpool.
+///
+/// ```
+/// # use bytes::Bytes;
+/// # use hyper::Body;
+/// # use http::{Request, Response, header::{self, HeaderMap, HeaderValue}};
+/// type BoxedError = Box<dyn std::error::Error + 'static + Send + Sync>;
+/// async fn serve_dictionary(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
+///     let f = tokio::task::block_in_place::<_, Result<_, BoxedError>>(
+///         move || {
+///             let f = std::fs::File::open("/usr/share/dict/words")?;
+///             let mut headers = http::header::HeaderMap::new();
+///             headers.insert(header::CONTENT_TYPE, HeaderValue::from_static("text/plain"));
+///             Ok(http_serve::ChunkedReadFile::new(f, headers)?)
+///         },
+///     )?;
+///     Ok(http_serve::serve(f, &req))
+/// }
+/// ```
 #[derive(Clone)]
 pub struct ChunkedReadFile<
     D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
@@ -55,10 +75,10 @@ where
 {
     /// Creates a new ChunkedReadFile.
     ///
-    /// `read(2)` calls will be wrapped in `tokio::task::block_in_place` calls so that they don't
-    /// block the tokio reactor thread on local disk I/O. Note that `File::open` and this
-    /// constructor (specifically, its call to `fstat(2)`) may also block, so they typically
-    /// should be wrapped in `tokio::task::block_in_place` as well.
+    /// `read(2)` calls will be wrapped in [`tokio::task::block_in_place`] calls so that they don't
+    /// block the tokio reactor thread on local disk I/O. Note that [`std::fs::File::open`] and
+    /// this constructor (specifically, its call to `fstat(2)`) may also block, so they typically
+    /// should be wrapped in [`tokio::task::block_in_place`] as well.
     pub fn new(file: std::fs::File, headers: HeaderMap) -> Result<Self, io::Error> {
         let m = file.metadata()?;
         ChunkedReadFile::new_with_metadata(file, &m, headers)
@@ -68,7 +88,7 @@ where
     ///
     /// This is an optimization for the case where the caller has already called `fstat(2)`.
     /// Note that on Windows, this still may perform a blocking file operation, so it should
-    /// still be wrapped in `tokio::task::block_in_place`.
+    /// still be wrapped in [`tokio::task::block_in_place`].
     pub fn new_with_metadata(
         file: ::std::fs::File,
         metadata: &::std::fs::Metadata,
