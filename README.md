@@ -20,6 +20,10 @@ This crate supplies two ways to respond to HTTP GET and HEAD requests:
     produce the complete body or call `BodyWriter::abort`, causing the HTTP
     stream to terminate abruptly.
 
+It also has a helper for serving a full directory tree from the local filesystem,
+including automatically looking for `.gz`-suffixed files when the client
+advertises `Accept-Encoding: gzip`.
+
 ## Why two ways?
 
 They have pros and cons. This table shows some of them:
@@ -55,11 +59,16 @@ your own that do anything you desire:
 extracted from [moonfire-nvr](https://github.com/scottlamb/moonfire-nvr)'s
 `.mp4` file serving.
 
-Try the example:
+Examples:
 
-```
-$ cargo run --example serve_file /usr/share/dict/words
-```
+*   Serve a single file:
+    ```
+    $ cargo run --example serve_file /usr/share/dict/words
+    ```
+*   Serve a directory tree:
+    ```
+    $ cargo run --features dir --example serve_dir .
+    ```
 
 ## Authors
 

@@ -6,8 +6,8 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Support for directory traversal from local filesystem.
-//! Currently Unix-only.
+//! Directory traversal on local filesystems.
+//! Currently Unix-only. Gated behind the `dir` feature.
 
 use http::header::{self, HeaderMap, HeaderValue};
 use memchr::memchr;

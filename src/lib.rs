@@ -102,6 +102,7 @@ macro_rules! unsafe_fmt_ascii_val {
 mod chunker;
 
 #[cfg(feature = "dir")]
+#[cfg_attr(docsrs, doc(cfg(feature = "dir")))]
 pub mod dir;
 
 mod etag;

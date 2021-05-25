@@ -13,6 +13,9 @@ edition = "2018"
 [features]
 dir = []
 
+[package.metadata.docs.rs]
+features = ["dir"]
+
 [dependencies]
 bytes = "1.0"
 flate2 = "1.0.1"
