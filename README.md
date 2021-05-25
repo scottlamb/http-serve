@@ -1,6 +1,7 @@
 # http-serve
 
 [![crates.io](https://meritbadge.herokuapp.com/http-serve)](https://crates.io/crates/http-serve)
+[![Released API docs](https://docs.rs/http-serve/badge.svg)](https://docs.rs/http-serve/)
 [![CI](https://github.com/scottlamb/http-serve/workflows/CI/badge.svg)](https://github.com/scottlamb/http-serve/actions?query=workflow%3ACI)
 
 Rust helpers for serving HTTP GET and HEAD responses with
@@ -21,7 +22,7 @@ This crate supplies two ways to respond to HTTP GET and HEAD requests:
 
 ## Why two ways?
 
-They have pros and cons. This chart shows some of them:
+They have pros and cons. This table shows some of them:
 
 <table>
   <tr><th><th><code>serve</code><th><code>streaming_body</code></tr>
@@ -31,6 +32,8 @@ They have pros and cons. This chart shows some of them:
   <tr><td>sends first byte before length known<td>no<td>yes</tr>
   <tr><td>automatic gzip content encoding<td>no<td>yes</tr>
 </table>
+
+See the [documentation](https://docs.rs/http-serve/) for more.
 
 There's also a built-in `Entity` implementation, `ChunkedReadFile`. It serves
 static files from the local filesystem, reading chunks in a separate thread

@@ -6,9 +6,9 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-//! Helpers for serving HTTP GET and HEAD responses with [hyper](https://crates.io/crates/hyper)
-//! 0.14.x and [tokio](https://crates.io/crates/tokio). A future version is likely to switch to
-//! the interface of the [http](http://crates.io/crates/http) crate.
+//! Helpers for serving HTTP GET and HEAD responses asynchronously with the
+//! [http](http://crates.io/crates/http) crate and [tokio](https://crates.io/crates/tokio).
+//! Works well with [hyper](https://crates.io/crates/hyper) 0.14.x.
 //!
 //! This crate supplies two ways to respond to HTTP GET and HEAD requests:
 //!
@@ -22,7 +22,7 @@
 //!
 //! # Why two ways?
 //!
-//! They have pros and cons. This chart shows some of them:
+//! They have pros and cons. This table shows some of them:
 //!
 //! <table>
 //!   <tr><th><th><code>serve</code><th><code>streaming_body</code></tr>
@@ -36,12 +36,12 @@
 //! Use `serve` when:
 //!
 //! *   metadata (length, etag, etc) and byte ranges can be regenerated cheaply and consistently
-//!     via a lazy `Entity`.
+//!     via a lazy `Entity`, or
 //! *   data can be fully buffered in memory or on disk and reused many times. You may want to
 //!     create a pair of buffers for gzipped (for user-agents which specify `Accept-Encoding:
 //!     gzip`) vs raw.
 //!
-//! Consider `streaming_body` if data would be fully buffered each time a response is sent.
+//! Consider `streaming_body` if the entire body is fully regenerated each time a response is sent.
 //!
 //! Once you return a `hyper::server::Response` to hyper, your only way to signal error to the
 //! client is to abruptly close the HTTP connection while sending the body. If you want the ability
@@ -53,15 +53,29 @@
 //! similar). `streaming_body` doesn't need to keep its own copy for potential future use; it may
 //! be cheaper because it can simply hand ownership of the existing `Vec<u8>`s to hyper.
 //!
-//! # Why the weird type bounds? Why not use `hyper::Body` and `hyper::Chunk` for everything?
+//! # Why the weird type bounds? Why not use `hyper::Body` and `bytes::Bytes` for everything?
 //!
-//! These bounds are compatible with `hyper::Body` and `hyper::Chunk`, and most callers will use
-//! those types. There are times when it's desirable to have more flexible ownership provided by a
-//! type such as `reffers::ARefs<'static, [u8]>`. One is `mmap`-based file serving: a
-//! `hyper::Chunk` would require copying the data in each chunk. An implementation with `ARefs`
+//! These bounds are compatible with `hyper::Body` and `bytes::Bytes`, and most callers will use
+//! those types. **Note:** if you see an error like the one below, ensure you are using hyper's
+//! `stream` feature:
+//!
+//! ```text
+//! error[E0277]: the trait bound `Body: From<Box<(dyn futures::Stream<Item = Result<_, _>> +
+//! std::marker::Send + 'static)>>` is not satisfied
+//! ```
+//!
+//! `Cargo.toml` should look similar to the following:
+//!
+//! ```toml
+//! hyper = { version = "0.14.7", features = ["stream"] }
+//! ```
+//!
+//! There are times when it's desirable to have more flexible ownership provided by a
+//! type such as `reffers::ARefs<'static, [u8]>`. One is `mmap`-based file serving:
+//! `bytes::Bytes` would require copying the data in each chunk. An implementation with `ARefs`
 //! could instead `mmap` and `mlock` the data on another thread and provide chunks which `munmap`
 //! when dropped. In these cases, the caller can supply an alternate implementation of the
-//! `http_body::Body` trait which uses a different `Data` type than `hyper::Chunk`.
+//! `http_body::Body` trait which uses a different `Data` type than `bytes::Bytes`.
 
 use bytes::Buf;
 use futures_core::Stream;
