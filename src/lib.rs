@@ -91,6 +91,8 @@
 //! when dropped. In these cases, the caller can supply an alternate implementation of the
 //! `http_body::Body` trait which uses a different `Data` type than `bytes::Bytes`.
 
+#![cfg_attr(docsrs, feature(doc_cfg))]
+
 use bytes::Buf;
 use futures_core::Stream;
 use http::header::{self, HeaderMap, HeaderValue};
