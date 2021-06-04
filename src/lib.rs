@@ -276,7 +276,6 @@ pub struct StreamingBodyBuilder {
     body_needed: bool,
 }
 
-
 /// Creates a response and streaming body writer for the given request.
 ///
 /// The streaming body writer is currently `Some(writer)` for `GET` requests and
