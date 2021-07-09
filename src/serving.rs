@@ -36,7 +36,7 @@ fn parse_modified_hdrs(
     } else if let (Some(ref m), Some(ref since)) =
         (last_modified, req_hdrs.get(header::IF_UNMODIFIED_SINCE))
     {
-        const ERR: &'static str = "Unparseable If-Unmodified-Since";
+        const ERR: &str = "Unparseable If-Unmodified-Since";
         *m > parse_http_date(since.to_str().map_err(|_| ERR)?).map_err(|_| ERR)?
     } else {
         false
@@ -47,7 +47,7 @@ fn parse_modified_hdrs(
     } else if let (Some(ref m), Some(ref since)) =
         (last_modified, req_hdrs.get(header::IF_MODIFIED_SINCE))
     {
-        const ERR: &'static str = "Unparseable If-Modified-Since";
+        const ERR: &str = "Unparseable If-Modified-Since";
         *m <= parse_http_date(since.to_str().map_err(|_| ERR)?).map_err(|_| ERR)?
     } else {
         false
@@ -295,7 +295,7 @@ impl<D, E> Stream for InnerBody<D, E> {
     ) -> std::task::Poll<Option<Result<D, E>>> {
         let mut this = self.project();
         match this {
-            InnerBodyProj::Once(ref mut o) => std::task::Poll::Ready(o.take().map(|d| Ok(d))),
+            InnerBodyProj::Once(ref mut o) => std::task::Poll::Ready(o.take().map(Ok)),
             InnerBodyProj::B(b) => b.as_mut().poll_next(ctx),
         }
     }
@@ -390,7 +390,7 @@ where
     } else if odd {
         InnerBody::B(Pin::from(ent.get_range(ranges[i].clone())))
     } else {
-        let v = std::mem::replace(&mut part_headers[i], Vec::new());
+        let v = std::mem::take(&mut part_headers[i]);
         InnerBody::Once(Some(v.into()))
     };
     futures_util::future::ready(Some((body, state + 1)))

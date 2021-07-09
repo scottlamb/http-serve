@@ -84,7 +84,7 @@ impl<'a> Iterator for List<'a> {
             }
         }
         self.remaining = rem;
-        return Some(etag);
+        Some(etag)
     }
 }
 

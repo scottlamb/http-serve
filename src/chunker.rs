@@ -87,7 +87,7 @@ where
         if !self.buf.is_empty() {
             let cap = self.buf.capacity();
             let full_buf = mem::replace(&mut self.buf, Vec::with_capacity(cap));
-            if let Err(_) = self.sender.unbounded_send(Ok(full_buf.into())) {
+            if self.sender.unbounded_send(Ok(full_buf.into())).is_err() {
                 // If this error is returned, no further writes will succeed either.
                 // Therefore, it's acceptable to just drop the full_buf (now e.into_inner())
                 // rather than put it back as self.buf; it won't cause us to write a stream with

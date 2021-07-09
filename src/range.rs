@@ -90,7 +90,7 @@ pub(crate) fn parse(range: Option<&HeaderValue>, len: u64) -> ResolvedRanges {
     if !ranges.is_empty() {
         return ResolvedRanges::Satisfiable(ranges);
     }
-    return ResolvedRanges::NotSatisfiable;
+    ResolvedRanges::NotSatisfiable
 }
 
 #[cfg(test)]

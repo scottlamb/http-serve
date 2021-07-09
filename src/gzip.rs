@@ -75,7 +75,7 @@ where
 {
     fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
         let r = match self.0 {
-            Inner::Dead => Err(io::Error::new(io::ErrorKind::BrokenPipe, "body is dead"))?,
+            Inner::Dead => return Err(io::Error::new(io::ErrorKind::BrokenPipe, "body is dead")),
             Inner::Raw(ref mut w) => w.write(buf),
             Inner::Gzipped(ref mut w) => w.write(buf),
         };
