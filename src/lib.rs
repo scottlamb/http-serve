@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2020 The http-serve developers
+// Copyright (c) 2016-2021 The http-serve developers
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE.txt or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -19,6 +19,11 @@
 //!     If a body is needed (on `GET` rather than `HEAD` requests), it returns a `BodyWriter`
 //!     (which implements `std::io::Writer`). The caller should produce the complete body or call
 //!     `BodyWriter::abort`, causing the HTTP stream to terminate abruptly.
+
+//! It supplies a static file `Entity` implementation and a (currently Unix-only)
+//! helper for serving a full directory tree from the local filesystem, including
+//! automatically looking for `.gz`-suffixed files when the client advertises
+//! `Accept-Encoding: gzip`.
 //!
 //! # Why two ways?
 //!

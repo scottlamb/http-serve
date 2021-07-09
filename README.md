@@ -20,9 +20,10 @@ This crate supplies two ways to respond to HTTP GET and HEAD requests:
     The caller should produce the complete body or call `BodyWriter::abort`,
     causing the HTTP stream to terminate abruptly.
 
-It also has a helper for serving a full directory tree from the local filesystem,
-including automatically looking for `.gz`-suffixed files when the client
-advertises `Accept-Encoding: gzip`.
+It supplies a static file `Entity` implementation and a (currently Unix-only)
+helper for serving a full directory tree from the local filesystem, including
+automatically looking for `.gz`-suffixed files when the client advertises
+`Accept-Encoding: gzip`.
 
 ## Why two ways?
 
@@ -63,7 +64,7 @@ requesting or handling `Transfer-Encoding`.
 
 See the [documentation](https://docs.rs/http-serve/) for more.
 
-There's also a built-in `Entity` implementation, `ChunkedReadFile`. It serves
+There's a built-in `Entity` implementation, `ChunkedReadFile`. It serves
 static files from the local filesystem, reading chunks in a separate thread
 pool to avoid blocking the tokio reactor thread.
 
