@@ -1,3 +1,8 @@
+# 0.3.2
+
+* documentation improvements
+* update deps
+
 # 0.3.1
 
 * Bump minimum Rust version to 1.46.
