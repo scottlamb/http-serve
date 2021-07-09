@@ -19,7 +19,7 @@
 //!     If a body is needed (on `GET` rather than `HEAD` requests), it returns a `BodyWriter`
 //!     (which implements `std::io::Writer`). The caller should produce the complete body or call
 //!     `BodyWriter::abort`, causing the HTTP stream to terminate abruptly.
-
+//!
 //! It supplies a static file `Entity` implementation and a (currently Unix-only)
 //! helper for serving a full directory tree from the local filesystem, including
 //! automatically looking for `.gz`-suffixed files when the client advertises
