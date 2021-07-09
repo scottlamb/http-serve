@@ -30,7 +30,7 @@
 //!   <tr><td>backpressure<td>yes<td>no [<a href="#backpressure">2</a>]</tr>
 //!   <tr><td>conditional GET<td>yes<td>no [<a href="#conditional_get">3</a>]</tr>
 //!   <tr><td>sends first byte before length known<td>no<td>yes</tr>
-//!   <tr><td>automatic gzip content encoding<td>no<td>yes</tr>
+//!   <tr><td>automatic gzip content encoding<td>no [<a href="#gzip">4</a>]<td>yes</tr>
 //! </table>
 //!
 //! <a name="range">\[1\]</a>: `streaming_body` always sends the full body. Byte range serving
@@ -46,6 +46,16 @@
 //!
 //! <a name="conditional_get">\[3\]</a>: `streaming_body` doesn't yet support
 //! generating etags or honoring conditional GET requests. PRs welcome!
+//!
+//! <a name="gzip">\[4\]</a>: `serve` doesn't automatically apply `Content-Encoding:
+//! gzip` because the content encoding is a property of the entity you supply. The
+//! entity's etag, length, and byte range boundaries must match the encoding. You
+//! can use the `http_serve::should_gzip` helper to decide between supplying a plain
+//! or gzipped entity. `serve` could automatically apply the related
+//! `Transfer-Encoding: gzip` where the browser requests it via `TE: gzip`, but
+//! common browsers have
+//! [chosen](https://bugs.chromium.org/p/chromium/issues/detail?id=94730) to avoid
+//! requesting or handling `Transfer-Encoding`.
 //!
 //! Use `serve` when:
 //!
