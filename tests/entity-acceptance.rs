@@ -380,6 +380,18 @@ async fn serve_with_strong_etag() {
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
 
+    // If-None-Match by etag which doesn't match, If-Modified-Since which does.
+    let resp = client
+        .get(&url)
+        .header("If-None-Match", "\"bar\"")
+        .header("If-Modified-Since", SOME_DATE_STR)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(reqwest::StatusCode::OK, resp.status());
+    assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
+    assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
+
     // Range serving - If-Range matching by etag.
     let resp = client
         .get(&url)

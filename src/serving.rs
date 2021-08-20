@@ -42,17 +42,29 @@ fn parse_modified_hdrs(
         false
     };
 
-    let not_modified = if !etag::none_match(&etag, req_hdrs).unwrap_or(true) {
-        true
-    } else if let (Some(ref m), Some(ref since)) =
-        (last_modified, req_hdrs.get(header::IF_MODIFIED_SINCE))
-    {
-        const ERR: &str = "Unparseable If-Modified-Since";
-        *m <= parse_http_date(since.to_str().map_err(|_| ERR)?).map_err(|_| ERR)?
-    } else {
-        false
-    };
+    let not_modified = match etag::none_match(&etag, req_hdrs) {
+        // See RFC 7233 section 14.26 <https://tools.ietf.org/html/rfc7233#section-14.26>:
+        // "If none of the entity tags match, then the server MAY perform the
+        // requested method as if the If-None-Match header field did not exist,
+        // but MUST also ignore any If-Modified-Since header field(s) in the
+        // request. That is, if no entity tags match, then the server MUST NOT
+        // return a 304 (Not Modified) response."
+        Some(true) => false,
 
+        Some(false) => true,
+
+        None => {
+            if let (Some(ref m), Some(ref since)) =
+                (last_modified, req_hdrs.get(header::IF_MODIFIED_SINCE))
+            {
+                const ERR: &str = "Unparseable If-Modified-Since";
+                println!("comparing m={:?} to since={:?}", m, since);
+                *m <= parse_http_date(since.to_str().map_err(|_| ERR)?).map_err(|_| ERR)?
+            } else {
+                false
+            }
+        }
+    };
     Ok((precondition_failed, not_modified))
 }
 

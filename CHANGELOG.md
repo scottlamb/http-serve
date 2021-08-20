@@ -1,3 +1,9 @@
+# 0.3.3 (2021-08-19)
+
+* Fix [#23](https://github.com/scottlamb/http-serve/issues/23):
+  erroneous `304 Not Modified` responses when the etag doesn't match
+  `If-None-Match` but the date isn't after `If-Unmodified-Since`.
+
 # 0.3.2 (2021-07-09)
 
 * documentation improvements

@@ -89,13 +89,13 @@ impl<'a> Iterator for List<'a> {
 }
 
 /// Returns true if `req` doesn't have an `If-None-Match` header matching `req`.
-pub fn none_match(etag: &Option<HeaderValue>, req_hdrs: &HeaderMap) -> Result<bool, &'static str> {
+pub fn none_match(etag: &Option<HeaderValue>, req_hdrs: &HeaderMap) -> Option<bool> {
     let m = match req_hdrs.get(header::IF_NONE_MATCH) {
-        None => return Ok(true),
+        None => return None,
         Some(m) => m.as_bytes(),
     };
     if m == b"*" {
-        return Ok(false);
+        return Some(false);
     }
     let mut none_match = true;
     if let Some(ref some_etag) = *etag {
@@ -108,10 +108,10 @@ pub fn none_match(etag: &Option<HeaderValue>, req_hdrs: &HeaderMap) -> Result<bo
             }
         }
         if items.corrupt {
-            return Err("Unparseable If-None-Match header");
+            return None; // ignore the header.
         }
     }
-    Ok(none_match)
+    Some(none_match)
 }
 
 /// Returns true if `req` has no `If-Match` header or one which matches `etag`.
