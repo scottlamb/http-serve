@@ -1,4 +1,4 @@
-// Copyright (c) 2016-2018 The http-serve developers
+// Copyright (c) 2016-2021 The http-serve developers
 //
 // Licensed under the Apache License, Version 2.0 <LICENSE-APACHE.txt or
 // http://www.apache.org/licenses/LICENSE-2.0> or the MIT license
@@ -6,7 +6,7 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
-use std::fs::File;
+use std::fs::{File, Metadata};
 use std::io;
 use std::time::SystemTime;
 
@@ -59,10 +59,9 @@ fn filetime_to_systemtime(time: winapi::shared::minwindef::FILETIME) -> SystemTi
 }
 
 #[cfg(unix)]
-pub fn file_info(file: &File) -> io::Result<FileInfo> {
+pub fn file_info(_file: &File, metadata: &Metadata) -> io::Result<FileInfo> {
     use std::os::unix::fs::MetadataExt;
 
-    let metadata = file.metadata()?;
     let info = FileInfo {
         inode: metadata.ino(),
         len: metadata.len(),
@@ -72,8 +71,11 @@ pub fn file_info(file: &File) -> io::Result<FileInfo> {
     Ok(info)
 }
 
+// TODO: switch to using std::os::windows::fs::MetadataExt when the accessors
+// we need are stable: https://github.com/rust-lang/rust/issues/63010
+// This will reduce the number of system calls and eliminate the winapi crate dependency.
 #[cfg(windows)]
-pub fn file_info(file: &File) -> io::Result<FileInfo> {
+pub fn file_info(file: &File, _metadata: &Metadata) -> io::Result<FileInfo> {
     use std::os::windows::io::AsRawHandle;
     use winapi::shared::minwindef::FILETIME;
     use winapi::um::fileapi::{self, BY_HANDLE_FILE_INFORMATION};

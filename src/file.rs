@@ -101,7 +101,7 @@ where
             return Err(io::Error::new(io::ErrorKind::Other, "expected a file"));
         }
 
-        let info = platform::file_info(&file)?;
+        let info = platform::file_info(&file, metadata)?;
 
         Ok(ChunkedReadFile {
             inner: Arc::new(ChunkedReadFileInner {

@@ -1,3 +1,7 @@
+# 0.3.4 (2021-08-31)
+
+* Avoid a second `fstat` call per `ChunkedReadFile` construction on Unix.
+
 # 0.3.3 (2021-08-19)
 
 * Fix [#23](https://github.com/scottlamb/http-serve/issues/23):
