@@ -58,7 +58,6 @@ fn parse_modified_hdrs(
                 (last_modified, req_hdrs.get(header::IF_MODIFIED_SINCE))
             {
                 const ERR: &str = "Unparseable If-Modified-Since";
-                println!("comparing m={:?} to since={:?}", m, since);
                 *m <= parse_http_date(since.to_str().map_err(|_| ERR)?).map_err(|_| ERR)?
             } else {
                 false
