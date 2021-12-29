@@ -1,3 +1,7 @@
+# 0.3.5 (2021-12-29)
+
+* Remove a `println!` accidentally introduced in 0.3.3.
+
 # 0.3.4 (2021-08-31)
 
 * Avoid a second `fstat` call per `ChunkedReadFile` construction on Unix.
