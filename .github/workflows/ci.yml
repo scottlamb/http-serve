@@ -45,3 +45,6 @@ jobs:
     - name: Check formatting
       if: matrix.rust == 'stable'
       run: cargo fmt -- --check
+    - name: Clippy
+      if: matrix.rust == 'stable'
+      run: cargo clippy

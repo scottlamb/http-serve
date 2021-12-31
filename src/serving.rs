@@ -33,7 +33,7 @@ fn parse_modified_hdrs(
 ) -> Result<(bool, bool), &'static str> {
     let precondition_failed = if !etag::any_match(etag, req_hdrs)? {
         true
-    } else if let (Some(ref m), Some(ref since)) =
+    } else if let (Some(ref m), Some(since)) =
         (last_modified, req_hdrs.get(header::IF_UNMODIFIED_SINCE))
     {
         const ERR: &str = "Unparseable If-Unmodified-Since";
@@ -42,7 +42,7 @@ fn parse_modified_hdrs(
         false
     };
 
-    let not_modified = match etag::none_match(&etag, req_hdrs) {
+    let not_modified = match etag::none_match(etag, req_hdrs) {
         // See RFC 7233 section 14.26 <https://tools.ietf.org/html/rfc7233#section-14.26>:
         // "If none of the entity tags match, then the server MAY perform the
         // requested method as if the If-None-Match header field did not exist,
@@ -54,7 +54,7 @@ fn parse_modified_hdrs(
         Some(false) => true,
 
         None => {
-            if let (Some(ref m), Some(ref since)) =
+            if let (Some(ref m), Some(since)) =
                 (last_modified, req_hdrs.get(header::IF_MODIFIED_SINCE))
             {
                 const ERR: &str = "Unparseable If-Modified-Since";
@@ -166,7 +166,7 @@ fn serve_inner<
     // RFC 2616) iff the client didn't specify If-Range.
     let mut range_hdr = req.headers().get(header::RANGE);
     let include_entity_headers_on_range = match req.headers().get(header::IF_RANGE) {
-        Some(ref if_range) => {
+        Some(if_range) => {
             let if_range = if_range.as_bytes();
             if if_range.starts_with(b"W/\"") || if_range.starts_with(b"\"") {
                 // etag case.
