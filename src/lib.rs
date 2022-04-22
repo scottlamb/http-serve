@@ -106,7 +106,7 @@
 //! when dropped. In these cases, the caller can supply an alternate implementation of the
 //! `http_body::Body` trait which uses a different `Data` type than `bytes::Bytes`.
 
-#![forbid(clippy::print_stderr, clippy::print_stdout)]
+#![deny(clippy::print_stderr, clippy::print_stdout)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use bytes::Buf;

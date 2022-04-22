@@ -6,30 +6,110 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use std::convert::TryFrom;
 use std::fs::{File, Metadata};
 use std::io;
 use std::time::SystemTime;
 
 pub trait FileExt {
-    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize>;
+    /// Reads at least 1, at most `chunk_size` bytes beginning at `offset`, or fails.
+    ///
+    /// If there are no bytes at `offset`, returns an `UnexpectedEof` error.
+    ///
+    /// The file cursor changes on Windows (like `std::os::windows::fs::seek_read`) but not Unix
+    /// (like `std::os::unix::fs::FileExt::read_at`). The caller never uses the cursor, so this
+    /// doesn't matter.
+    ///
+    /// The implementation goes directly to `libc` or `winapi` to allow soundly reading into an
+    /// uninitialized buffer. This may change after
+    /// [`read_buf`](https://github.com/rust-lang/rust/issues/78485) is stabilized, including buf
+    /// equivalents of `read_at`/`seek_read`.
+    fn read_at(&self, chunk_size: usize, offset: u64) -> io::Result<Vec<u8>>;
 }
 
 impl FileExt for std::fs::File {
     #[cfg(unix)]
-    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
-        use std::os::unix::fs::FileExt;
+    fn read_at(&self, chunk_size: usize, offset: u64) -> io::Result<Vec<u8>> {
+        use std::os::unix::io::AsRawFd;
 
-        FileExt::read_at(self, buf, offset)
+        let mut chunk = Vec::with_capacity(chunk_size);
+        let offset = libc::off_t::try_from(offset).map_err(|_| {
+            std::io::Error::new(std::io::ErrorKind::InvalidInput, "offset too large")
+        })?;
+
+        // SAFETY: `Vec::with_capacity` guaranteed the passed pointers are valid.
+        let retval = unsafe {
+            libc::pread(
+                self.as_raw_fd(),
+                chunk.as_mut_ptr() as *mut libc::c_void,
+                chunk_size,
+                offset,
+            )
+        };
+        let bytes_read = usize::try_from(retval).map_err(|_| std::io::Error::last_os_error())?;
+
+        if bytes_read == 0 {
+            return Err(std::io::Error::new(
+                std::io::ErrorKind::UnexpectedEof,
+                format!("no bytes beyond position {}", offset),
+            ));
+        }
+
+        // SAFETY: `libc::pread` guaranteed these bytes are initialized.
+        unsafe {
+            chunk.set_len(bytes_read);
+        }
+        Ok(chunk)
     }
 
     #[cfg(windows)]
-    fn read_at(&self, buf: &mut [u8], offset: u64) -> io::Result<usize> {
-        use std::os::windows::fs::FileExt;
+    fn read_at(&self, chunk_size: usize, offset: u64) -> io::Result<Vec<u8>> {
+        use std::os::windows::io::AsRawHandle;
+        use winapi::shared::minwindef::DWORD;
+        let handle = self.as_raw_handle();
+        let mut read = 0;
+        let mut chunk = Vec::with_capacity(chunk_size);
 
-        // The difference between this and the Unix version is that `seek_read`
-        // changes the file cursor position, while `read_at` doesn't.
-        // We don't depend on the cursor, so that's all right.
-        FileExt::seek_read(self, buf, offset)
+        // https://github.com/rust-lang/rust/blob/5ffebc2cb3a089c27a4c7da13d09fd2365c288aa/library/std/src/sys/windows/handle.rs#L230
+        // https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
+        unsafe {
+            let mut overlapped: winapi::um::minwinbase::OVERLAPPED = std::mem::zeroed();
+            overlapped.u.s_mut().Offset = offset as u32;
+            overlapped.u.s_mut().OffsetHigh = (offset >> 32) as u32;
+
+            // SAFETY: `Vec::with_capacity` guaranteed the pointer range is valid.
+            if winapi::um::fileapi::ReadFile(
+                handle,
+                chunk.as_mut_ptr() as *mut winapi::ctypes::c_void,
+                DWORD::try_from(chunk_size).unwrap_or(DWORD::MAX), // saturating conversion
+                &mut read,
+                &mut overlapped,
+            ) == 0
+            {
+                match winapi::um::errhandlingapi::GetLastError() {
+                    // Match std's <https://github.com/rust-lang/rust/issues/81357> fix:
+                    // abort the process before `overlapped` is dropped.
+                    #[allow(clippy::print_stderr)]
+                    winapi::shared::winerror::ERROR_IO_PENDING => {
+                        eprintln!("I/O error: operation failed to complete synchronously");
+                        std::process::abort();
+                    }
+                    winapi::shared::winerror::ERROR_HANDLE_EOF => {
+                        // std::io::Error::from_raw_os_error converts this to ErrorKind::Other.
+                        // Override that.
+                        return Err(std::io::Error::new(
+                            std::io::ErrorKind::UnexpectedEof,
+                            format!("no bytes beyond position {}", offset),
+                        ));
+                    }
+                    o => return Err(std::io::Error::from_raw_os_error(o as i32)),
+                }
+            }
+
+            // SAFETY: `ReadFile` guaranteed that `read` bytes have been read.
+            chunk.set_len(usize::try_from(read).expect("u32 should fit in usize"));
+        }
+        Ok(chunk)
     }
 }
 

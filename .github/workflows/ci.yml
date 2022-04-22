@@ -47,4 +47,4 @@ jobs:
       run: cargo fmt -- --check
     - name: Clippy
       if: matrix.rust == 'stable'
-      run: cargo clippy
+      run: cargo clippy -- -D warnings
