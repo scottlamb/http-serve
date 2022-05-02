@@ -64,15 +64,17 @@ impl FileExt for std::fs::File {
 
     #[cfg(windows)]
     fn read_at(&self, chunk_size: usize, offset: u64) -> io::Result<Vec<u8>> {
+        // References:
+        // https://github.com/rust-lang/rust/blob/5ffebc2cb3a089c27a4c7da13d09fd2365c288aa/library/std/src/sys/windows/handle.rs#L230
+        // https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
         use std::os::windows::io::AsRawHandle;
         use winapi::shared::minwindef::DWORD;
         let handle = self.as_raw_handle();
         let mut read = 0;
         let mut chunk = Vec::with_capacity(chunk_size);
 
-        // https://github.com/rust-lang/rust/blob/5ffebc2cb3a089c27a4c7da13d09fd2365c288aa/library/std/src/sys/windows/handle.rs#L230
-        // https://docs.microsoft.com/en-us/windows/win32/api/fileapi/nf-fileapi-readfile
         unsafe {
+            // SAFETY: a zero `OVERLAPPED` is valid.
             let mut overlapped: winapi::um::minwinbase::OVERLAPPED = std::mem::zeroed();
             overlapped.u.s_mut().Offset = offset as u32;
             overlapped.u.s_mut().OffsetHigh = (offset >> 32) as u32;
@@ -87,10 +89,10 @@ impl FileExt for std::fs::File {
             ) == 0
             {
                 match winapi::um::errhandlingapi::GetLastError() {
-                    // Match std's <https://github.com/rust-lang/rust/issues/81357> fix:
-                    // abort the process before `overlapped` is dropped.
                     #[allow(clippy::print_stderr)]
                     winapi::shared::winerror::ERROR_IO_PENDING => {
+                        // Match std's <https://github.com/rust-lang/rust/issues/81357> fix:
+                        // abort the process before `overlapped` is dropped.
                         eprintln!("I/O error: operation failed to complete synchronously");
                         std::process::abort();
                     }
@@ -106,7 +108,7 @@ impl FileExt for std::fs::File {
                 }
             }
 
-            // SAFETY: `ReadFile` guaranteed that `read` bytes have been read.
+            // SAFETY: `ReadFile` guaranteed these bytes are initialized.
             chunk.set_len(usize::try_from(read).expect("u32 should fit in usize"));
         }
         Ok(chunk)
