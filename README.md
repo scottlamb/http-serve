@@ -1,6 +1,6 @@
 # http-serve
 
-[![crates.io](https://meritbadge.herokuapp.com/http-serve)](https://crates.io/crates/http-serve)
+[![crates.io](https://img.shields.io/crates/v/http-serve.svg)](https://crates.io/crates/http-serve)
 [![Released API docs](https://docs.rs/http-serve/badge.svg)](https://docs.rs/http-serve/)
 [![CI](https://github.com/scottlamb/http-serve/workflows/CI/badge.svg)](https://github.com/scottlamb/http-serve/actions?query=workflow%3ACI)
 
