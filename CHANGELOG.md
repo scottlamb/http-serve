@@ -1,4 +1,4 @@
-# unreleased
+# 0.3.6 (2022-05-01)
 
 * Fix [#25](https://github.com/scottlamb/http-serve/issues/25):
   unsound use of `Vec::set_len` within `ChunkedReadFile`.
