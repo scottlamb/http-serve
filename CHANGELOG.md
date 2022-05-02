@@ -1,3 +1,12 @@
+# unreleased
+
+* Fix [#25](https://github.com/scottlamb/http-serve/issues/25):
+  unsound use of `Vec::set_len` within `ChunkedReadFile`.
+* Fix infinite loop in `<ChunkedReadFile as Entity>::get_range`
+  if the file ends before the specified range does. This could
+  happen for example if the file is truncated between the
+  `ChunkedReadFile` being created and read.
+
 # 0.3.5 (2021-12-29)
 
 * Remove a `println!` accidentally introduced in 0.3.3.

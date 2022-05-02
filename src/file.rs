@@ -144,28 +144,19 @@ where
                 }
                 let chunk_size = std::cmp::min(CHUNK_SIZE, left.end - left.start) as usize;
                 Some(tokio::task::block_in_place(move || {
-                    // Read directly into an uninitialized buffer. By a strict reading of the
-                    // Vec::set_len docs, this is unsound (the buffer must be initialized first),
-                    // but tokio::io::BufReader does something similar (at least these two calls in
-                    // a row), so I'll assume for now it doesn't cause problems in practice.
-                    // It looks like there's work to avoid this problem here:
-                    // https://github.com/rust-lang/rust/issues/42788
-                    let mut chunk = Vec::with_capacity(chunk_size);
-                    unsafe { chunk.set_len(chunk_size) };
-                    let bytes_read = match inner.f.read_at(&mut chunk, left.start) {
-                        Err(e) => {
-                            return (
-                                Err(Box::<dyn StdError + Send + Sync + 'static>::from(e).into()),
-                                (left, inner),
+                    match inner.f.read_at(chunk_size, left.start) {
+                        Err(e) => (
+                            Err(Box::<dyn StdError + Send + Sync + 'static>::from(e).into()),
+                            (left, inner),
+                        ),
+                        Ok(v) => {
+                            let bytes_read = v.len();
+                            (
+                                Ok(v.into()),
+                                (left.start + bytes_read as u64..left.end, inner),
                             )
                         }
-                        Ok(b) => b,
-                    };
-                    chunk.truncate(bytes_read);
-                    (
-                        Ok(chunk.into()),
-                        (left.start + bytes_read as u64..left.end, inner),
-                    )
+                    }
                 }))
             },
         );
@@ -214,15 +205,25 @@ mod tests {
     use super::Entity;
     use bytes::Bytes;
     use futures_core::Stream;
+    use futures_util::stream::TryStreamExt;
     use http::header::HeaderMap;
     use std::fs::File;
     use std::io::Write;
+    use std::pin::Pin;
 
     type BoxedError = Box<dyn std::error::Error + Sync + Send>;
     type CRF = ChunkedReadFile<Bytes, BoxedError>;
 
-    async fn to_bytes(s: Box<dyn Stream<Item = Result<Bytes, BoxedError>> + Send>) -> Bytes {
-        hyper::body::to_bytes(hyper::Body::from(s)).await.unwrap()
+    async fn to_bytes(
+        s: Box<dyn Stream<Item = Result<Bytes, BoxedError>> + Send>,
+    ) -> Result<Bytes, BoxedError> {
+        let concat = Pin::from(s)
+            .try_fold(Vec::new(), |mut acc, item| async move {
+                acc.extend(&item[..]);
+                Ok(acc)
+            })
+            .await?;
+        Ok(concat.into())
     }
 
     #[tokio::test(flavor = "multi_thread")]
@@ -238,8 +239,14 @@ mod tests {
             let etag1 = crf.etag();
 
             // Test returning part/all of the stream.
-            assert_eq!(&to_bytes(crf.get_range(0..4)).await.as_ref(), b"asdf");
-            assert_eq!(&to_bytes(crf.get_range(1..3)).await.as_ref(), b"sd");
+            assert_eq!(
+                &to_bytes(crf.get_range(0..4)).await.unwrap().as_ref(),
+                b"asdf"
+            );
+            assert_eq!(
+                &to_bytes(crf.get_range(1..3)).await.unwrap().as_ref(),
+                b"sd"
+            );
 
             // A ChunkedReadFile constructed from a modified file should have a different etag.
             f.write_all(b"jkl;").unwrap();
@@ -247,6 +254,27 @@ mod tests {
             assert_eq!(8, crf.len());
             let etag2 = crf.etag();
             assert_ne!(etag1, etag2);
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn truncate_race() {
+        tokio::spawn(async move {
+            let tmp = tempfile::tempdir().unwrap();
+            let p = tmp.path().join("f");
+            let mut f = File::create(&p).unwrap();
+            f.write_all(b"asdf").unwrap();
+
+            let crf = CRF::new(File::open(&p).unwrap(), HeaderMap::new()).unwrap();
+            assert_eq!(4, crf.len());
+            f.set_len(3).unwrap();
+
+            // Test that
+            let e = to_bytes(crf.get_range(0..4)).await.unwrap_err();
+            let e = e.downcast::<std::io::Error>().unwrap();
+            assert_eq!(e.kind(), std::io::ErrorKind::UnexpectedEof);
         })
         .await
         .unwrap();
