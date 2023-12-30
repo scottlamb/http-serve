@@ -60,7 +60,6 @@ async fn main() -> Result<(), BoxedError> {
 
     let ctx: &'static Context = Box::leak(Box::new(Context { path: path }));
 
-    env_logger::init();
     let addr = ([127, 0, 0, 1], 1337).into();
     let make_svc = make_service_fn(move |_conn| {
         future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(ctx, req)))

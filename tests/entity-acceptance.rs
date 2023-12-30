@@ -106,7 +106,6 @@ static SERVER: Lazy<String> = Lazy::new(new_server);
 
 #[tokio::test]
 async fn serve_without_etag() {
-    let _ = env_logger::try_init();
     let client = reqwest::Client::new();
     let url = format!("{}/none", *SERVER);
 
@@ -315,7 +314,6 @@ async fn serve_without_etag() {
 
 #[tokio::test]
 async fn serve_with_strong_etag() {
-    let _ = env_logger::try_init();
     let client = reqwest::Client::new();
     let url = format!("{}/strong", *SERVER);
 
@@ -427,7 +425,6 @@ async fn serve_with_strong_etag() {
 
 #[tokio::test]
 async fn serve_with_weak_etag() {
-    let _ = env_logger::try_init();
     let client = reqwest::Client::new();
     let url = format!("{}/weak", *SERVER);
 

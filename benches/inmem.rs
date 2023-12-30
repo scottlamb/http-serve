@@ -139,7 +139,6 @@ static SERVER: Lazy<SocketAddr> = Lazy::new(new_server);
 /// to avoid errors due to ephemeral port exhaustion. This requires some parsing with `httparse`
 /// to read the correct amount of data.
 fn get(b: &mut criterion::Bencher, path: &str) {
-    let _ = env_logger::try_init();
     let mut v = Vec::new();
     v.extend(b"GET /");
     v.extend(path.as_bytes());

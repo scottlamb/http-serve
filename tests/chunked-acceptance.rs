@@ -79,7 +79,6 @@ fn setup_req(
 }
 
 async fn basic(path: &'static str, auto_gzip: bool) {
-    let _ = env_logger::try_init();
     let (cmds, req) = setup_req(path, auto_gzip);
     let resp = req.send().await.unwrap();
 
@@ -102,7 +101,6 @@ async fn auto_gzip() {
 }
 
 async fn abort(path: &'static str, auto_gzip: bool) {
-    let _ = env_logger::try_init();
     let (cmds, req) = setup_req(path, auto_gzip);
     let mut resp = req.send().await.unwrap();
 
@@ -136,7 +134,6 @@ async fn auto_gzip_abort() {
 #[tokio::test]
 async fn manual_gzip() {
     use reqwest::header;
-    let _ = env_logger::try_init();
     let (cmds, req) = setup_req("/manual_gzip", false);
     let resp = req.header("Accept-Encoding", "gzip").send().await.unwrap();
 

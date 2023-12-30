@@ -9,6 +9,7 @@ keywords = ["http", "file", "range"]
 categories = ["web-programming::http-server"]
 repository = "https://github.com/scottlamb/http-serve"
 edition = "2018"
+rust-version = "1.70"
 
 [features]
 dir = []
@@ -39,16 +40,15 @@ libc = "0.2.69"
 winapi = { version = "0.3.6", features = ["std", "winbase"] }
 
 [dev-dependencies]
-criterion = { version = "0.3.4", features = ["async_tokio"] }
-env_logger = "0.9"
+criterion = { version = "0.5", features = ["async_tokio"] }
 htmlescape = "0.3"
 httparse = "1.3.4"
 hyper = { version = "0.14", features = ["http1", "http2", "server", "stream", "tcp"] }
 mime_guess = "2.0"
-nix = { version = "0.24", default-features = false, features = ["dir", "fs"] }
+nix = { version = "0.27", default-features = false, features = ["dir", "fs"] }
 once_cell = "1.3"
 reqwest = { version = "0.11", default-features = false, features = ["gzip"] }
-socket2 = { version = "0.4.0" }
+socket2 = { version = "0.5.0" }
 tempfile = "3.1.0"
 
 [profile.release]

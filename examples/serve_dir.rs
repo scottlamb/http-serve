@@ -126,7 +126,6 @@ async fn serve(
 async fn main() {
     let dir: &'static Arc<dir::FsDir> =
         Box::leak(Box::new(dir::FsDir::builder().for_path(".").unwrap()));
-    env_logger::init();
     let addr = ([127, 0, 0, 1], 1337).into();
     let make_svc = make_service_fn(move |_conn| {
         future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(dir, req)))
