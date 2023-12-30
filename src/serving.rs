@@ -98,7 +98,7 @@ pub fn serve<
     // serve takes entity itself for ownership, as needed for the multipart case. But to avoid
     // monomorphization code bloat when there are many implementations of Entity<Data, Error>,
     // delegate as much as possible to functions which take a reference to a trait object.
-    match serve_inner(&entity, req) {
+    match serve_inner(&entity, req.method(), req.headers()) {
         ServeInner::Simple(res) => res,
         ServeInner::Multipart {
             res,
@@ -130,12 +130,12 @@ fn serve_inner<
     D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
     E: 'static + Send + Sync,
     B: Body + From<Box<dyn Stream<Item = Result<D, E>> + Send>>,
-    BI,
 >(
     ent: &dyn Entity<Error = E, Data = D>,
-    req: &Request<BI>,
+    method: &http::Method,
+    req_hdrs: &http::HeaderMap,
 ) -> ServeInner<B> {
-    if *req.method() != Method::GET && *req.method() != Method::HEAD {
+    if method != Method::GET && method != Method::HEAD {
         return ServeInner::Simple(
             Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
@@ -149,7 +149,7 @@ fn serve_inner<
     let etag = ent.etag();
 
     let (precondition_failed, not_modified) =
-        match parse_modified_hdrs(&etag, req.headers(), last_modified) {
+        match parse_modified_hdrs(&etag, req_hdrs, last_modified) {
             Err(s) => {
                 return ServeInner::Simple(
                     Response::builder()
@@ -164,8 +164,8 @@ fn serve_inner<
     // See RFC 7233 section 4.1 <https://tools.ietf.org/html/rfc7233#section-4.1>: a Partial
     // Content response should include other representation header fields (aka entity-headers in
     // RFC 2616) iff the client didn't specify If-Range.
-    let mut range_hdr = req.headers().get(header::RANGE);
-    let include_entity_headers_on_range = match req.headers().get(header::IF_RANGE) {
+    let mut range_hdr = req_hdrs.get(header::RANGE);
+    let include_entity_headers_on_range = match req_hdrs.get(header::IF_RANGE) {
         Some(if_range) => {
             let if_range = if_range.as_bytes();
             if if_range.starts_with(b"W/\"") || if_range.starts_with(b"\"") {
@@ -245,13 +245,16 @@ fn serve_inner<
                 let est_len: u64 = ranges.iter().map(|r| 80 + r.end - r.start).sum();
                 if est_len < len {
                     let (res, part_headers) = prepare_multipart(
-                        ent,
                         res,
                         &ranges[..],
                         len,
-                        include_entity_headers_on_range,
+                        include_entity_headers_on_range.then(|| {
+                            let mut h = HeaderMap::new();
+                            ent.add_headers(&mut h);
+                            h
+                        }),
                     );
-                    if *req.method() == Method::HEAD {
+                    if method == Method::HEAD {
                         return ServeInner::Simple(res.body(empty_body::<D, E>().into()).unwrap());
                     }
                     return ServeInner::Multipart {
@@ -277,7 +280,7 @@ fn serve_inner<
         header::CONTENT_LENGTH,
         unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", range.end - range.start),
     );
-    let body = match *req.method() {
+    let body = match *method {
         Method::HEAD => empty_body::<D, E>(),
         _ => ent.get_range(range),
     };
@@ -314,26 +317,18 @@ impl<D, E> Stream for InnerBody<D, E> {
 
 /// Prepares to send a `multipart/mixed` response.
 /// Returns the response builder (with overall headers added) and each part's headers.
-fn prepare_multipart<D, E>(
-    ent: &dyn Entity<Data = D, Error = E>,
+fn prepare_multipart(
     mut res: http::response::Builder,
     ranges: &[Range<u64>],
     len: u64,
-    include_entity_headers: bool,
-) -> (http::response::Builder, Vec<Vec<u8>>)
-where
-    D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Sync,
-{
+    include_entity_headers: Option<http::header::HeaderMap>,
+) -> (http::response::Builder, Vec<Vec<u8>>) {
     let mut each_part_headers = Vec::new();
-    if include_entity_headers {
-        let mut h = http::header::HeaderMap::new();
-        ent.add_headers(&mut h);
+    if let Some(h) = include_entity_headers {
         each_part_headers.reserve(
             h.iter()
                 .map(|(k, v)| k.as_str().len() + v.as_bytes().len() + 4)
-                .sum::<usize>()
-                + 2,
+                .sum::<usize>(),
         );
         for (k, v) in &h {
             each_part_headers.extend_from_slice(k.as_str().as_bytes());
@@ -342,12 +337,16 @@ where
             each_part_headers.extend_from_slice(b"\r\n");
         }
     }
-    each_part_headers.extend_from_slice(b"\r\n");
 
     let mut body_len = 0;
-    let mut part_headers: Vec<Vec<u8>> = Vec::with_capacity(2 * ranges.len() + 1);
+    let mut part_headers: Vec<Vec<u8>> = Vec::with_capacity(ranges.len());
     for r in ranges {
-        let mut buf = Vec::with_capacity(64 + each_part_headers.len());
+        let mut buf = Vec::with_capacity(
+            "\r\n--B\r\nContent-Range: bytes -/\r\n".len()
+                + 3 * MAX_DECIMAL_U64_BYTES
+                + each_part_headers.len()
+                + "\r\n".len(),
+        );
         write!(
             &mut buf,
             "\r\n--B\r\nContent-Range: bytes {}-{}/{}\r\n",
@@ -357,6 +356,7 @@ where
         )
         .unwrap();
         buf.extend_from_slice(&each_part_headers);
+        buf.extend_from_slice(b"\r\n");
         body_len += buf.len() as u64 + r.end - r.start;
         part_headers.push(buf);
     }
