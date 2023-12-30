@@ -17,7 +17,6 @@ use http::{self, Method, Request, Response, StatusCode};
 use http_body::Body;
 use httpdate::{fmt_http_date, parse_http_date};
 use pin_project::pin_project;
-use smallvec::SmallVec;
 use std::future::Future;
 use std::io::Write;
 use std::ops::Range;
@@ -121,7 +120,7 @@ enum ServeInner<B> {
     Multipart {
         res: http::response::Builder,
         part_headers: Vec<Vec<u8>>,
-        ranges: SmallVec<[Range<u64>; 1]>,
+        ranges: Vec<Range<u64>>,
     },
 }
 
@@ -225,20 +224,22 @@ fn serve_inner<
     let (range, include_entity_headers) = match range::parse(range_hdr, len) {
         range::ResolvedRanges::None => (0..len, true),
         range::ResolvedRanges::Satisfiable(ranges) => {
-            if ranges.len() == 1 {
+            if let [range] = &ranges[..] {
                 res = res.header(
                     header::CONTENT_RANGE,
                     unsafe_fmt_ascii_val!(
                         MAX_DECIMAL_U64_BYTES * 3 + "bytes -/".len(),
                         "bytes {}-{}/{}",
-                        ranges[0].start,
-                        ranges[0].end - 1,
+                        range.start,
+                        range.end - 1,
                         len
                     ),
                 );
                 res = res.status(StatusCode::PARTIAL_CONTENT);
-                (ranges[0].clone(), include_entity_headers_on_range)
+                (range.clone(), include_entity_headers_on_range)
             } else {
+                let ranges = ranges.into_vec();
+
                 // Before serving multiple ranges via multipart/byteranges, estimate the total
                 // length. ("80" is the RFC's estimate of the size of each part's header.) If it's
                 // more than simply serving the whole entity, do that instead.
