@@ -71,14 +71,20 @@ fn parse_modified_hdrs(
 pub struct Body<D = bytes::Bytes, E = BoxError>(InnerBody<D, E>);
 
 impl<D, E> Body<D, E> {
-    fn empty() -> Self {
+    pub fn empty() -> Self {
         Self(InnerBody::Once(None))
     }
 }
 
-impl<D: From<&'static [u8]>, E> Body<D, E> {
-    fn from_str(value: &'static str) -> Self {
+impl<D: From<&'static [u8]>, E> From<&'static str> for Body<D, E> {
+    fn from(value: &'static str) -> Self {
         Self(InnerBody::Once(Some(value.as_bytes().into())))
+    }
+}
+
+impl<D: From<Vec<u8>>, E> From<String> for Body<D, E> {
+    fn from(value: String) -> Self {
+        Self(InnerBody::Once(Some(value.into_bytes().into())))
     }
 }
 
@@ -211,7 +217,7 @@ fn serve_inner<
             Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .header(header::ALLOW, HeaderValue::from_static("get, head"))
-                .body(Body::from_str("This resource only supports GET and HEAD."))
+                .body(Body::from("This resource only supports GET and HEAD."))
                 .unwrap(),
         );
     }
@@ -225,7 +231,7 @@ fn serve_inner<
                 return ServeInner::Simple(
                     Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(Body::from_str(s))
+                        .body(Body::from(s))
                         .unwrap(),
                 )
             }
@@ -281,7 +287,7 @@ fn serve_inner<
 
     if precondition_failed {
         res = res.status(StatusCode::PRECONDITION_FAILED);
-        return ServeInner::Simple(res.body(Body::from_str("Precondition failed")).unwrap());
+        return ServeInner::Simple(res.body(Body::from("Precondition failed")).unwrap());
     }
 
     if not_modified {
