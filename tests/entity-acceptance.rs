@@ -6,16 +6,19 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use bytes::Bytes;
 use futures_core::Stream;
 use futures_util::{future, stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
-use hyper::body::Body;
+use http_serve::Body;
+use hyper_util::rt::TokioIo;
 use once_cell::sync::Lazy;
 use std::ops::Range;
 use std::time::SystemTime;
+use tokio::net::TcpListener;
 
-type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 static BODY: &'static [u8] =
     b"01234567890123456789012345678901234567890123456789012345678901234567890123456789\
@@ -56,7 +59,9 @@ impl http_serve::Entity for &'static FakeEntity {
     }
 }
 
-async fn serve(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
+async fn serve(
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<Body<Bytes, BoxError>>, BoxError> {
     let entity: &'static FakeEntity = match req.uri().path() {
         "/none" => &*ENTITY_NO_ETAG,
         "/strong" => &*ENTITY_STRONG_ETAG,
@@ -69,16 +74,24 @@ async fn serve(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
 fn new_server() -> String {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let make_svc = hyper::service::make_service_fn(|_conn| {
-            future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
-        });
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
-
-        let addr = ([127, 0, 0, 1], 0).into();
-        let srv = hyper::Server::bind(&addr).serve(make_svc);
-        tx.send(srv.local_addr()).unwrap();
-        rt.block_on(srv).unwrap();
+        rt.block_on(async {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+            let listener = TcpListener::bind(addr).await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            tx.send(addr).unwrap();
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let io = TokioIo::new(tcp);
+                tokio::task::spawn(async move {
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(io, hyper::service::service_fn(serve))
+                        .await
+                        .unwrap();
+                });
+            }
+        });
     });
     let addr = rx.recv().unwrap();
     format!("http://{}:{}", addr.ip(), addr.port())
@@ -490,3 +503,6 @@ async fn serve_with_weak_etag() {
     assert_eq!(resp.headers().get(reqwest::header::CONTENT_RANGE), None);
     assert_eq!(BODY, &resp.bytes().await.unwrap()[..]);
 }
+
+// TODO: stream that returns too much data.
+// TODO: stream that returns too little data.

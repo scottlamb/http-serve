@@ -7,7 +7,6 @@
 // except according to those terms.
 
 use futures_channel::mpsc;
-use futures_core::Stream;
 use std::io::{self, Write};
 use std::mem;
 
@@ -34,23 +33,22 @@ where
     buf: Vec<u8>,
 }
 
+pub(crate) type BodyStream<D, E> = mpsc::UnboundedReceiver<Result<D, E>>;
+
 impl<D, E> BodyWriter<D, E>
 where
     D: From<Vec<u8>> + Send + 'static,
     E: Send + 'static,
 {
-    pub(crate) fn with_chunk_size(
-        cap: usize,
-    ) -> (Self, Box<dyn Stream<Item = Result<D, E>> + Send>) {
+    pub(crate) fn with_chunk_size(cap: usize) -> (Self, BodyStream<D, E>) {
         assert!(cap > 0);
         let (snd, rcv) = mpsc::unbounded();
-        let body = Box::new(rcv);
         (
             BodyWriter {
                 sender: snd,
                 buf: Vec::with_capacity(cap),
             },
-            body,
+            rcv,
         )
     }
 
@@ -115,16 +113,14 @@ where
 #[cfg(test)]
 mod tests {
     use super::BodyWriter;
-    use futures_core::Stream;
     use futures_util::{stream::StreamExt, stream::TryStreamExt};
     use std::io::Write;
-    use std::pin::Pin;
 
-    type BoxedError = Box<dyn std::error::Error + 'static + Send + Sync>;
-    type BodyStream = Box<dyn Stream<Item = Result<Vec<u8>, BoxedError>> + Send>;
+    type BoxError = Box<dyn std::error::Error + 'static + Send + Sync>;
+    type BodyStream = super::BodyStream<Vec<u8>, BoxError>;
 
     async fn to_vec(s: BodyStream) -> Vec<u8> {
-        Pin::from(s).try_concat().await.unwrap()
+        s.try_concat().await.unwrap()
     }
 
     // A smaller-than-chunk-size write shouldn't be flushed on write, and there's currently no Drop
@@ -199,9 +195,7 @@ mod tests {
             "asdf",
         )));
         drop(w);
-        let items = Pin::<_>::from(body)
-            .collect::<Vec<Result<Vec<u8>, BoxedError>>>()
-            .await;
+        let items = body.collect::<Vec<Result<Vec<u8>, BoxError>>>().await;
         assert_eq!(items.len(), 2);
         assert_eq!(b"1234", &items[0].as_ref().unwrap()[..]);
         items[1].as_ref().unwrap_err();

@@ -15,8 +15,8 @@ use futures_core::Stream;
 use futures_util::{future, stream};
 use http::header::HeaderValue;
 use http::{Request, Response};
+use http_body_util::BodyExt;
 use http_serve::streaming_body;
-use hyper::Body;
 use once_cell::sync::Lazy;
 use std::convert::TryInto;
 use std::io::{Read, Write};
@@ -27,13 +27,13 @@ use std::time::{Duration, SystemTime};
 
 static WONDERLAND: &[u8] = include_bytes!("wonderland.txt");
 
-type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
 struct BytesEntity(Bytes);
 
 impl http_serve::Entity for BytesEntity {
     type Data = Bytes;
-    type Error = BoxedError;
+    type Error = BoxError;
 
     fn len(&self) -> u64 {
         self.0.len() as u64
@@ -62,18 +62,20 @@ impl http_serve::Entity for BytesEntity {
     }
 }
 
-async fn serve(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
+type Body = http_body_util::combinators::BoxBody<Bytes, BoxError>;
+
+async fn serve(req: Request<hyper::body::Incoming>) -> Result<Response<Body>, BoxError> {
     let path = req.uri().path();
     let resp = match path.as_bytes()[1] {
         b's' => {
             // static entity
-            http_serve::serve(BytesEntity(Bytes::from_static(WONDERLAND)), &req)
+            http_serve::serve(BytesEntity(Bytes::from_static(WONDERLAND)), &req).map(BodyExt::boxed)
         }
         b'c' => {
             // copied entity
             let mut b = BytesMut::with_capacity(WONDERLAND.len());
             b.extend_from_slice(WONDERLAND);
-            http_serve::serve(BytesEntity(b.freeze()), &req)
+            http_serve::serve(BytesEntity(b.freeze()), &req).map(BodyExt::boxed)
         }
         b'b' => {
             // chunked, data written before returning the Response.
@@ -87,7 +89,7 @@ async fn serve(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
             if let Some(mut w) = w {
                 w.write_all(WONDERLAND).unwrap();
             }
-            resp
+            resp.map(BodyExt::boxed)
         }
         b'a' => {
             // chunked, data written after returning the Response.
@@ -104,7 +106,7 @@ async fn serve(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
                 }
                 Ok::<_, std::convert::Infallible>(())
             });
-            resp
+            resp.map(BodyExt::boxed)
         }
         _ => unreachable!(),
     };

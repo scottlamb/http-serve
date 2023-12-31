@@ -9,15 +9,15 @@
 use super::Entity;
 use crate::etag;
 use crate::range;
+use crate::BoxError;
 use bytes::Buf;
 use futures_core::Stream;
 use futures_util::stream::{self, StreamExt};
 use http::header::{self, HeaderMap, HeaderValue};
 use http::{self, Method, Request, Response, StatusCode};
-use http_body::Body;
+use http_body::Body as HttpBody;
 use httpdate::{fmt_http_date, parse_http_date};
 use pin_project::pin_project;
-use std::future::Future;
 use std::io::Write;
 use std::ops::Range;
 use std::pin::Pin;
@@ -66,34 +66,98 @@ fn parse_modified_hdrs(
     Ok((precondition_failed, not_modified))
 }
 
-fn static_body<D, E>(s: &'static str) -> Box<dyn Stream<Item = Result<D, E>> + Send>
-where
-    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send,
-{
-    Box::new(stream::once(futures_util::future::ok(s.as_bytes().into())))
+/// A [`http_body::Body`] implementation returned by [`serve`].
+#[pin_project]
+pub struct Body<D = bytes::Bytes, E = BoxError>(InnerBody<D, E>);
+
+impl<D, E> Body<D, E> {
+    fn empty() -> Self {
+        Self(InnerBody::Once(None))
+    }
 }
 
-fn empty_body<D, E>() -> Box<dyn Stream<Item = Result<D, E>> + Send>
+impl<D: From<&'static [u8]>, E> Body<D, E> {
+    fn from_str(value: &'static str) -> Self {
+        Self(InnerBody::Once(Some(value.as_bytes().into())))
+    }
+}
+
+impl<D, E> Stream for Body<D, E>
 where
-    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send,
+    D: Buf,
 {
-    Box::new(stream::empty())
+    type Item = Result<D, E>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        let b: &mut InnerBody<D, E> = self.project().0;
+        std::task::Poll::Ready(match std::mem::replace(b, InnerBody::Once(None)) {
+            InnerBody::Once(mut o) => o.take().map(Ok),
+            InnerBody::B {
+                remaining,
+                mut stream,
+            } => match std::task::ready!(stream.as_mut().poll_next(cx)) {
+                None => {
+                    assert_eq!(remaining, 0);
+                    None
+                }
+
+                e @ Some(Err(_)) => e,
+
+                Some(Ok(d)) => {
+                    let d_remaining = d.remaining();
+                    match remaining.checked_sub(d_remaining as u64) {
+                        None => {
+                            panic!(
+                                "body stream returned {} bytes; expected only {}",
+                                d_remaining, remaining
+                            );
+                        }
+                        Some(0) => Some(Ok(d)),
+                        Some(n) => {
+                            *b = InnerBody::B {
+                                remaining: n,
+                                stream,
+                            };
+                            Some(Ok(d))
+                        }
+                    }
+                }
+            },
+        })
+    }
+}
+
+impl<D, E> HttpBody for Body<D, E>
+where
+    D: Buf,
+{
+    type Data = D;
+    type Error = E;
+
+    fn poll_frame(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
+        self.poll_next(cx).map_ok(http_body::Frame::data)
+    }
+
+    #[inline]
+    fn is_end_stream(&self) -> bool {
+        matches!(self.0, InnerBody::Once(None))
+    }
 }
 
 /// Serves GET and HEAD requests for a given byte-ranged entity.
 /// Handles conditional & subrange requests.
 /// The caller is expected to have already determined the correct entity and appended
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
-pub fn serve<
-    Ent: Entity,
-    B: Body + From<Box<dyn Stream<Item = Result<Ent::Data, Ent::Error>> + Send>>,
-    BI,
->(
+pub fn serve<Ent: Entity, BI>(
     entity: Ent,
     req: &Request<BI>,
-) -> Response<B> {
+) -> Response<Body<Ent::Data, Ent::Error>> {
     // serve takes entity itself for ownership, as needed for the multipart case. But to avoid
     // monomorphization code bloat when there are many implementations of Entity<Data, Error>,
     // delegate as much as possible to functions which take a reference to a trait object.
@@ -103,24 +167,33 @@ pub fn serve<
             res,
             mut part_headers,
             ranges,
+            len,
         } => {
             let bodies = stream::unfold(0, move |state| {
-                next_multipart_body_chunk(state, &entity, &ranges[..], &mut part_headers[..])
+                std::future::ready(next_multipart_body_chunk(
+                    state,
+                    &entity,
+                    &ranges[..],
+                    &mut part_headers[..],
+                ))
             });
-            let body = bodies.flatten();
-            let body: Box<dyn Stream<Item = Result<Ent::Data, Ent::Error>> + Send> = Box::new(body);
-            res.body(body.into()).unwrap()
+            res.body(Body(InnerBody::B {
+                remaining: len,
+                stream: Box::pin(bodies.flatten()),
+            }))
+            .unwrap()
         }
     }
 }
 
 /// An instruction from `serve_inner` to `serve` on how to respond.
-enum ServeInner<B> {
-    Simple(Response<B>),
+enum ServeInner<D, E> {
+    Simple(Response<Body<D, E>>),
     Multipart {
         res: http::response::Builder,
         part_headers: Vec<Vec<u8>>,
         ranges: Vec<Range<u64>>,
+        len: u64,
     },
 }
 
@@ -128,18 +201,17 @@ enum ServeInner<B> {
 fn serve_inner<
     D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
     E: 'static + Send + Sync,
-    B: Body + From<Box<dyn Stream<Item = Result<D, E>> + Send>>,
 >(
     ent: &dyn Entity<Error = E, Data = D>,
     method: &http::Method,
     req_hdrs: &http::HeaderMap,
-) -> ServeInner<B> {
+) -> ServeInner<D, E> {
     if method != Method::GET && method != Method::HEAD {
         return ServeInner::Simple(
             Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .header(header::ALLOW, HeaderValue::from_static("get, head"))
-                .body(static_body::<D, E>("This resource only supports GET and HEAD.").into())
+                .body(Body::from_str("This resource only supports GET and HEAD."))
                 .unwrap(),
         );
     }
@@ -153,7 +225,7 @@ fn serve_inner<
                 return ServeInner::Simple(
                     Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(static_body::<D, E>(s).into())
+                        .body(Body::from_str(s))
                         .unwrap(),
                 )
             }
@@ -209,15 +281,12 @@ fn serve_inner<
 
     if precondition_failed {
         res = res.status(StatusCode::PRECONDITION_FAILED);
-        return ServeInner::Simple(
-            res.body(static_body::<D, E>("Precondition failed").into())
-                .unwrap(),
-        );
+        return ServeInner::Simple(res.body(Body::from_str("Precondition failed")).unwrap());
     }
 
     if not_modified {
         res = res.status(StatusCode::NOT_MODIFIED);
-        return ServeInner::Simple(res.body(empty_body::<D, E>().into()).unwrap());
+        return ServeInner::Simple(res.body(Body::empty()).unwrap());
     }
 
     let len = ent.len();
@@ -245,7 +314,7 @@ fn serve_inner<
                 // more than simply serving the whole entity, do that instead.
                 let est_len: u64 = ranges.iter().map(|r| 80 + r.end - r.start).sum();
                 if est_len < len {
-                    let (res, part_headers) = prepare_multipart(
+                    let (res, part_headers, len) = prepare_multipart(
                         res,
                         &ranges[..],
                         len,
@@ -256,12 +325,13 @@ fn serve_inner<
                         }),
                     );
                     if method == Method::HEAD {
-                        return ServeInner::Simple(res.body(empty_body::<D, E>().into()).unwrap());
+                        return ServeInner::Simple(res.body(Body::empty()).unwrap());
                     }
                     return ServeInner::Multipart {
                         res,
                         part_headers,
                         ranges,
+                        len,
                     };
                 }
 
@@ -274,18 +344,22 @@ fn serve_inner<
                 unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES + "bytes */".len(), "bytes */{}", len),
             );
             res = res.status(StatusCode::RANGE_NOT_SATISFIABLE);
-            return ServeInner::Simple(res.body(empty_body::<D, E>().into()).unwrap());
+            return ServeInner::Simple(res.body(Body::empty()).unwrap());
         }
     };
+    let len = range.end - range.start;
     res = res.header(
         header::CONTENT_LENGTH,
-        unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", range.end - range.start),
+        unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", len),
     );
     let body = match *method {
-        Method::HEAD => empty_body::<D, E>(),
-        _ => ent.get_range(range),
+        Method::HEAD => Body::empty(),
+        _ => Body(InnerBody::B {
+            remaining: range.end - range.start,
+            stream: ent.get_range(range).into(),
+        }),
     };
-    let mut res = res.body(body.into()).unwrap();
+    let mut res = res.body(body).unwrap();
     if include_entity_headers {
         ent.add_headers(res.headers_mut());
     }
@@ -294,36 +368,24 @@ fn serve_inner<
 
 /// A body for use in the "stream of streams" (see `prepare_multipart` and its call site).
 /// This avoids an extra allocation for the part headers and overall trailer.
-#[pin_project(project=InnerBodyProj)]
 enum InnerBody<D, E> {
     Once(Option<D>),
 
     // The box variant _holds_ a pin but isn't structurally pinned.
-    B(Pin<Box<dyn Stream<Item = Result<D, E>> + Sync + Send>>),
-}
-
-impl<D, E> Stream for InnerBody<D, E> {
-    type Item = Result<D, E>;
-    fn poll_next(
-        self: Pin<&mut Self>,
-        ctx: &mut std::task::Context,
-    ) -> std::task::Poll<Option<Result<D, E>>> {
-        let mut this = self.project();
-        match this {
-            InnerBodyProj::Once(ref mut o) => std::task::Poll::Ready(o.take().map(Ok)),
-            InnerBodyProj::B(b) => b.as_mut().poll_next(ctx),
-        }
-    }
+    B {
+        remaining: u64,
+        stream: Pin<Box<dyn Stream<Item = Result<D, E>> + Sync + Send>>,
+    },
 }
 
 /// Prepares to send a `multipart/mixed` response.
-/// Returns the response builder (with overall headers added) and each part's headers.
+/// Returns the response builder (with overall headers added), each part's headers, and overall len.
 fn prepare_multipart(
     mut res: http::response::Builder,
     ranges: &[Range<u64>],
     len: u64,
     include_entity_headers: Option<http::header::HeaderMap>,
-) -> (http::response::Builder, Vec<Vec<u8>>) {
+) -> (http::response::Builder, Vec<Vec<u8>>, u64) {
     let mut each_part_headers = Vec::new();
     if let Some(h) = include_entity_headers {
         each_part_headers.reserve(
@@ -373,7 +435,7 @@ fn prepare_multipart(
     );
     res = res.status(StatusCode::PARTIAL_CONTENT);
 
-    (res, part_headers)
+    (res, part_headers, body_len)
 }
 
 /// The trailer after all `multipart/byteranges` body parts.
@@ -388,7 +450,7 @@ fn next_multipart_body_chunk<D, E>(
     ent: &dyn Entity<Data = D, Error = E>,
     ranges: &[Range<u64>],
     part_headers: &mut [Vec<u8>],
-) -> impl Future<Output = Option<(InnerBody<D, E>, usize)>>
+) -> Option<(Body<D, E>, usize)>
 where
     D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
     E: 'static + Send + Sync,
@@ -396,14 +458,18 @@ where
     let i = state >> 1;
     let odd = (state & 1) == 1;
     let body = if i == ranges.len() && odd {
-        return futures_util::future::ready(None);
+        return None;
     } else if i == ranges.len() {
         InnerBody::Once(Some(PART_TRAILER.into()))
     } else if odd {
-        InnerBody::B(Pin::from(ent.get_range(ranges[i].clone())))
+        let r = &ranges[i];
+        InnerBody::B {
+            remaining: r.end - r.start,
+            stream: Pin::from(ent.get_range(r.clone())),
+        }
     } else {
         let v = std::mem::take(&mut part_headers[i]);
         InnerBody::Once(Some(v.into()))
     };
-    futures_util::future::ready(Some((body, state + 1)))
+    Some((Body(body), state + 1))
 }

@@ -6,16 +6,21 @@
 // option. This file may not be copied, modified, or distributed
 // except according to those terms.
 
+use bytes::Bytes;
 use futures_channel::mpsc::{self, UnboundedReceiver, UnboundedSender};
 use futures_util::{future, StreamExt};
+use hyper_util::rt::TokioIo;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::io::{self, Write};
 use std::sync::Mutex;
+use tokio::net::TcpListener;
 
-type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-async fn serve(req: http::Request<hyper::Body>) -> Result<http::Response<hyper::Body>, BoxedError> {
+async fn serve(
+    req: http::Request<hyper::body::Incoming>,
+) -> Result<http::Response<http_serve::StreamingBody<Bytes, BoxError>>, BoxError> {
     let cmds = CMDS.lock().unwrap().remove(req.uri().path()).unwrap();
     let (resp, w) = http_serve::streaming_body(&req).build();
     let mut w = w.unwrap();
@@ -44,21 +49,28 @@ struct Server {
 fn new_server() -> Server {
     let (server_tx, server_rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let make_svc = hyper::service::make_service_fn(|_conn| {
-            future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
-        });
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
-
-        let addr = ([127, 0, 0, 1], 0).into();
-        let srv = hyper::Server::bind(&addr).serve(make_svc);
-        let addr = srv.local_addr();
-        server_tx
-            .send(Server {
-                addr: format!("http://{}:{}", addr.ip(), addr.port()),
-            })
-            .unwrap();
-        rt.block_on(srv).unwrap();
+        rt.block_on(async {
+            let addr = std::net::SocketAddr::from(([127, 0, 0, 1], 0));
+            let listener = TcpListener::bind(addr).await.unwrap();
+            let addr = listener.local_addr().unwrap();
+            server_tx
+                .send(Server {
+                    addr: format!("http://{}:{}", addr.ip(), addr.port()),
+                })
+                .unwrap();
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                let io = TokioIo::new(tcp);
+                tokio::task::spawn(async move {
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(io, hyper::service::service_fn(serve))
+                        .await
+                        .unwrap();
+                });
+            }
+        });
     });
     server_rx.recv().unwrap()
 }

@@ -32,11 +32,10 @@ static CHUNK_SIZE: u64 = 65_536;
 ///
 /// ```
 /// # use bytes::Bytes;
-/// # use hyper::Body;
 /// # use http::{Request, Response, header::{self, HeaderMap, HeaderValue}};
-/// type BoxedError = Box<dyn std::error::Error + 'static + Send + Sync>;
-/// async fn serve_dictionary(req: Request<Body>) -> Result<Response<Body>, BoxedError> {
-///     let f = tokio::task::block_in_place::<_, Result<_, BoxedError>>(
+/// type BoxError = Box<dyn std::error::Error + Send + Sync>;
+/// async fn serve_dictionary(req: Request<hyper::body::Incoming>) -> Result<Response<http_serve::Body>, BoxError> {
+///     let f = tokio::task::block_in_place::<_, Result<_, BoxError>>(
 ///         move || {
 ///             let f = std::fs::File::open("/usr/share/dict/words")?;
 ///             let mut headers = http::header::HeaderMap::new();
@@ -211,12 +210,12 @@ mod tests {
     use std::io::Write;
     use std::pin::Pin;
 
-    type BoxedError = Box<dyn std::error::Error + Sync + Send>;
-    type CRF = ChunkedReadFile<Bytes, BoxedError>;
+    type BoxError = Box<dyn std::error::Error + Sync + Send>;
+    type CRF = ChunkedReadFile<Bytes, BoxError>;
 
     async fn to_bytes(
-        s: Box<dyn Stream<Item = Result<Bytes, BoxedError>> + Send>,
-    ) -> Result<Bytes, BoxedError> {
+        s: Box<dyn Stream<Item = Result<Bytes, BoxError>> + Send>,
+    ) -> Result<Bytes, BoxError> {
         let concat = Pin::from(s)
             .try_fold(Vec::new(), |mut acc, item| async move {
                 acc.extend(&item[..]);

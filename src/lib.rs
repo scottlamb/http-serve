@@ -111,7 +111,9 @@
 
 use bytes::Buf;
 use futures_core::Stream;
+use futures_util::TryStreamExt as _;
 use http::header::{self, HeaderMap, HeaderValue};
+use http_body::Frame;
 use std::ops::Range;
 use std::str::FromStr;
 use std::time::SystemTime;
@@ -131,6 +133,8 @@ macro_rules! unsafe_fmt_ascii_val {
     }}
 }
 
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
 mod chunker;
 
 #[cfg(feature = "dir")]
@@ -146,7 +150,7 @@ mod serving;
 
 pub use crate::file::ChunkedReadFile;
 pub use crate::gzip::BodyWriter;
-pub use crate::serving::serve;
+pub use crate::serving::{serve, Body};
 
 /// A reusable, read-only, byte-rangeable HTTP entity for GET and HEAD serving.
 /// Must return exactly the same data on every call.
@@ -172,7 +176,7 @@ pub trait Entity: 'static + Send + Sync {
         range: Range<u64>,
     ) -> Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync>;
 
-    /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
+    /// Adds entity headers such as `Content-Type` to the supplied `HeaderMap`.
     /// In particular, these headers are the "other representation header fields" described by [RFC
     /// 7233 section 4.1](https://tools.ietf.org/html/rfc7233#section-4.1); they should exclude
     /// `Content-Range`, `Date`, `Cache-Control`, `ETag`, `Expires`, `Content-Location`, and `Vary`.
@@ -302,7 +306,7 @@ pub struct StreamingBodyBuilder {
 /// # use http::{Request, Response, header::{self, HeaderValue}};
 /// use std::io::Write as _;
 ///
-/// fn respond(req: Request<hyper::Body>) -> std::io::Result<Response<hyper::Body>> {
+/// fn respond(req: Request<hyper::body::Incoming>) -> std::io::Result<Response<http_serve::StreamingBody>> {
 ///     let (mut resp, stream) = http_serve::streaming_body(&req).build();
 ///     if let Some(mut w) = stream {
 ///         write!(&mut w, "hello world")?;
@@ -321,7 +325,7 @@ pub struct StreamingBodyBuilder {
 /// # use http::{Request, Response, header::{self, HeaderValue}};
 /// use std::io::Write as _;
 ///
-/// fn respond(req: Request<hyper::Body>) -> std::io::Result<Response<hyper::Body>> {
+/// fn respond(req: Request<hyper::body::Incoming>) -> std::io::Result<Response<http_serve::StreamingBody>> {
 ///     let (mut resp, stream) = http_serve::streaming_body(&req).build();
 ///     if let Some(mut w) = stream {
 ///         tokio::spawn(async move {
@@ -345,6 +349,10 @@ pub fn streaming_body<T>(req: &http::Request<T>) -> StreamingBodyBuilder {
     }
 }
 
+pub type StreamingBody<D = bytes::Bytes, E = BoxError> = http_body_util::StreamBody<
+    futures_util::stream::MapOk<chunker::BodyStream<D, E>, fn(D) -> http_body::Frame<D>>,
+>;
+
 impl StreamingBodyBuilder {
     /// Sets the size of a data chunk.
     ///
@@ -365,14 +373,20 @@ impl StreamingBodyBuilder {
     }
 
     /// Returns the HTTP response and, if the request is a `GET`, a body writer.
-    pub fn build<P, D, E>(self) -> (http::Response<P>, Option<BodyWriter<D, E>>)
+    pub fn build<D, E>(
+        self,
+    ) -> (
+        http::Response<StreamingBody<D, E>>,
+        Option<BodyWriter<D, E>>,
+    )
     where
         D: From<Vec<u8>> + Send + Sync,
         E: Send + Sync,
-        P: From<Box<dyn Stream<Item = Result<D, E>> + Send>>,
     {
         let (w, stream) = chunker::BodyWriter::with_chunk_size(self.chunk_size);
-        let mut resp = http::Response::new(stream.into());
+        let mut resp = http::Response::new(http_body_util::StreamBody::new(
+            stream.map_ok(Frame::data as fn(D) -> Frame<D>),
+        ));
         resp.headers_mut()
             .append(header::VARY, HeaderValue::from_static("accept-encoding"));
 
