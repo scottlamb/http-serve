@@ -17,6 +17,7 @@ use http::header::HeaderValue;
 use http::{Request, Response};
 use http_body_util::BodyExt;
 use http_serve::streaming_body;
+use hyper_util::rt::TokioIo;
 use once_cell::sync::Lazy;
 use std::convert::TryInto;
 use std::io::{Read, Write};
@@ -24,6 +25,7 @@ use std::net::SocketAddr;
 use std::ops::Range;
 use std::str::FromStr;
 use std::time::{Duration, SystemTime};
+use tokio::net::TcpListener;
 
 static WONDERLAND: &[u8] = include_bytes!("wonderland.txt");
 
@@ -117,17 +119,24 @@ async fn serve(req: Request<hyper::body::Incoming>) -> Result<Response<Body>, Bo
 fn new_server() -> SocketAddr {
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
-        let make_svc = hyper::service::make_service_fn(|_conn| {
-            futures_util::future::ok::<_, hyper::Error>(hyper::service::service_fn(serve))
-        });
         let rt = tokio::runtime::Runtime::new().unwrap();
         let _guard = rt.enter();
-
-        let addr = ([127, 0, 0, 1], 0).into();
-        let srv = hyper::Server::bind(&addr).tcp_nodelay(true).serve(make_svc);
-        let addr = srv.local_addr();
-        tx.send(addr).unwrap();
-        rt.block_on(srv).unwrap();
+        rt.block_on(async {
+            let addr = SocketAddr::from(([127, 0, 0, 1], 0));
+            let listener = TcpListener::bind(addr).await.unwrap();
+            tx.send(listener.local_addr().unwrap()).unwrap();
+            loop {
+                let (tcp, _) = listener.accept().await.unwrap();
+                tokio::spawn(async move {
+                    tcp.set_nodelay(true).unwrap();
+                    let io = TokioIo::new(tcp);
+                    hyper::server::conn::http1::Builder::new()
+                        .serve_connection(io, hyper::service::service_fn(serve))
+                        .await
+                        .unwrap();
+                });
+            }
+        });
     });
     rx.recv().unwrap()
 }
