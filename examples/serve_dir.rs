@@ -9,23 +9,28 @@
 //! Test program which serves the current directory on `http://127.0.0.1:1337/`.
 //! Note this requires `--features dir`.
 
-use futures_util::future;
 use http::header::{self, HeaderMap, HeaderValue};
 use http_serve::dir;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::Body;
+use hyper_util::rt::TokioIo;
 use std::fmt::Write;
 use std::io::Write as RawWrite;
+use std::net::SocketAddr;
 use std::sync::Arc;
+use tokio::net::TcpListener;
+
+use http_serve::Body;
 
 fn is_dir(dir: &nix::dir::Dir, ent: &nix::dir::Entry) -> Result<bool, nix::Error> {
+    // Many filesystems return file types in the directory entries.
     if let Some(t) = ent.file_type() {
         return Ok(t == nix::dir::Type::Directory);
     }
+
+    // ...but some require an fstat call.
     use nix::sys::stat::{fstatat, SFlag};
     use std::os::unix::io::AsRawFd;
     let stat = fstatat(
-        dir.as_raw_fd(),
+        Some(dir.as_raw_fd()),
         ent.file_name(),
         nix::fcntl::AtFlags::empty(),
     )?;
@@ -34,7 +39,7 @@ fn is_dir(dir: &nix::dir::Dir, ent: &nix::dir::Entry) -> Result<bool, nix::Error
 }
 
 fn reply(
-    req: http::Request<Body>,
+    req: http::Request<hyper::body::Incoming>,
     node: dir::Node,
 ) -> Result<http::Response<Body>, ::std::io::Error> {
     if node.metadata().is_dir() {
@@ -45,7 +50,7 @@ fn reply(
             return Ok(http::Response::builder()
                 .status(http::StatusCode::MOVED_PERMANENTLY)
                 .header(http::header::LOCATION, loc)
-                .body(Body::empty())
+                .body(http_serve::Body::empty())
                 .unwrap());
         }
         let (mut resp, stream) = http_serve::streaming_body(&req).build();
@@ -99,16 +104,19 @@ fn reply(
 
 async fn serve(
     fs_dir: &Arc<dir::FsDir>,
-    req: http::Request<Body>,
+    req: http::Request<hyper::body::Incoming>,
 ) -> Result<http::Response<Body>, ::std::io::Error> {
     let p = if req.uri().path() == "/" {
         "."
     } else {
         &req.uri().path()[1..]
     };
-    // TODO: this should go through the same unwrapping.
-    let node = Arc::clone(&fs_dir).get(p, req.headers()).await?;
-    let e = match reply(req, node) {
+
+    let e = match Arc::clone(&fs_dir)
+        .get(p, req.headers())
+        .await
+        .and_then(|node| reply(req, node))
+    {
         Ok(res) => return Ok(res),
         Err(e) => e,
     };
@@ -118,7 +126,7 @@ async fn serve(
     };
     Ok(http::Response::builder()
         .status(status)
-        .body(format!("I/O error: {}", e).into())
+        .body(http_serve::Body::from(format!("I/O error: {}", e)))
         .unwrap())
 }
 
@@ -126,11 +134,18 @@ async fn serve(
 async fn main() {
     let dir: &'static Arc<dir::FsDir> =
         Box::leak(Box::new(dir::FsDir::builder().for_path(".").unwrap()));
-    let addr = ([127, 0, 0, 1], 1337).into();
-    let make_svc = make_service_fn(move |_conn| {
-        future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(dir, req)))
-    });
-    let server = hyper::Server::bind(&addr).serve(make_svc);
-    println!("Serving . on http://{} with 1 thread.", server.local_addr());
-    server.await.unwrap();
+    let addr = SocketAddr::from((std::net::Ipv4Addr::LOCALHOST, 1337));
+    let listener = TcpListener::bind(addr).await.unwrap();
+    println!("Serving . on http://{}", listener.local_addr().unwrap());
+    loop {
+        let (tcp, _) = listener.accept().await.unwrap();
+        tokio::spawn(async move {
+            tcp.set_nodelay(true).unwrap();
+            let io = TokioIo::new(tcp);
+            hyper::server::conn::http1::Builder::new()
+                .serve_connection(io, hyper::service::service_fn(move |req| serve(dir, req)))
+                .await
+                .unwrap();
+        });
+    }
 }

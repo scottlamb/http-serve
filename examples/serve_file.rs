@@ -18,24 +18,29 @@
 //! $ curl -v -H 'Range: bytes=1-10,30-40' http://127.0.0.1:1337/
 //! ```
 
+use std::net::{Ipv4Addr, SocketAddr};
+
 use bytes::Bytes;
-use futures_util::future;
 use http::{
     header::{self, HeaderMap, HeaderValue},
     Request, Response,
 };
 use http_serve::ChunkedReadFile;
-use hyper::service::{make_service_fn, service_fn};
-use hyper::Body;
+use hyper::{server::conn::http1, service::service_fn};
+use hyper_util::rt::TokioIo;
+use tokio::net::TcpListener;
 
 struct Context {
     path: std::ffi::OsString,
 }
 
-type BoxedError = Box<dyn std::error::Error + Send + Sync>;
+type BoxError = Box<dyn std::error::Error + Send + Sync>;
 
-async fn serve(ctx: &'static Context, req: Request<Body>) -> Result<Response<Body>, BoxedError> {
-    let f = tokio::task::block_in_place::<_, Result<ChunkedReadFile<Bytes, BoxedError>, BoxedError>>(
+async fn serve(
+    ctx: &'static Context,
+    req: Request<hyper::body::Incoming>,
+) -> Result<Response<http_serve::Body>, BoxError> {
+    let f = tokio::task::block_in_place::<_, Result<ChunkedReadFile<Bytes, BoxError>, BoxError>>(
         move || {
             let f = std::fs::File::open(&ctx.path)?;
             let mut headers = HeaderMap::new();
@@ -50,7 +55,7 @@ async fn serve(ctx: &'static Context, req: Request<Body>) -> Result<Response<Bod
 }
 
 #[tokio::main]
-async fn main() -> Result<(), BoxedError> {
+async fn main() -> Result<(), BoxError> {
     let mut args = std::env::args_os();
     if args.len() != 2 {
         eprintln!("Expected serve [FILENAME]");
@@ -60,17 +65,19 @@ async fn main() -> Result<(), BoxedError> {
 
     let ctx: &'static Context = Box::leak(Box::new(Context { path: path }));
 
-    let addr = ([127, 0, 0, 1], 1337).into();
-    let make_svc = make_service_fn(move |_conn| {
-        future::ok::<_, std::convert::Infallible>(service_fn(move |req| serve(ctx, req)))
-    });
-    let server = hyper::Server::bind(&addr).serve(make_svc);
-    println!(
-        "Serving {} on http://{} with 1 thread.",
-        ctx.path.to_string_lossy(),
-        server.local_addr()
-    );
-    server.await?;
-
-    Ok(())
+    let addr: SocketAddr = (Ipv4Addr::LOCALHOST, 1337).into();
+    let listener = TcpListener::bind(addr).await?;
+    println!("Serving {} on http://{}", ctx.path.to_string_lossy(), addr,);
+    loop {
+        let (tcp, _) = listener.accept().await?;
+        let io = TokioIo::new(tcp);
+        tokio::task::spawn(async move {
+            if let Err(e) = http1::Builder::new()
+                .serve_connection(io, service_fn(move |req| serve(ctx, req)))
+                .await
+            {
+                eprintln!("Error serving connection: {}", e);
+            }
+        });
+    }
 }

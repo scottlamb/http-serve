@@ -11,7 +11,7 @@ jobs:
       matrix:
         rust:
           - stable
-          - 1.70.0
+          - 1.79.0
         os:
           - ubuntu-20.04
           - windows-latest

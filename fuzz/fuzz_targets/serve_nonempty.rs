@@ -1,9 +1,9 @@
 #![no_main]
-use futures::Stream;
 use http::header::HeaderValue;
-use hyper::Body;
+use http_body::Body as _;
 use libfuzzer_sys::fuzz_target;
 use once_cell::sync::Lazy;
+use std::pin::Pin;
 use std::task::Poll;
 use std::time::SystemTime;
 
@@ -45,7 +45,7 @@ struct Req {
 
 impl http_serve::Entity for &'static FakeEntity {
     type Data = bytes::Bytes;
-    type Error = Box<dyn std::error::Error + Send + Sync>;
+    type Error = http_serve::BoxError;
 
     fn len(&self) -> u64 {
         BODY.len() as u64
@@ -53,8 +53,8 @@ impl http_serve::Entity for &'static FakeEntity {
     fn get_range(
         &self,
         range: std::ops::Range<u64>,
-    ) -> Box<dyn futures::Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync> {
-        Box::new(futures::stream::once(futures::future::ok(
+    ) -> Pin<Box<dyn futures::Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync>> {
+        Box::pin(futures::stream::once(futures::future::ok(
             BODY[range.start as usize..range.end as usize].into(),
         )))
     }
@@ -99,13 +99,13 @@ fuzz_target!(|data: Req| {
         Ok(r) => r,
     };
 
-    let response = http_serve::serve::<_, Body, _>(&*ENTITY_STRONG_ETAG, &request);
-    let body: Body = response.into_body();
+    let response = http_serve::serve(&*ENTITY_STRONG_ETAG, &request);
+    let body = response.into_body();
     futures::pin_mut!(body);
     let waker = futures::task::noop_waker();
     let mut cx = futures::task::Context::from_waker(&waker);
     loop {
-        match body.as_mut().poll_next(&mut cx) {
+        match body.as_mut().poll_frame(&mut cx) {
             Poll::Pending => panic!("FakeEntity is never pending"),
             Poll::Ready(Some(Err(_))) => panic!("FakeEntity never serves error"),
             Poll::Ready(Some(Ok(_))) => {}

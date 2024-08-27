@@ -8,7 +8,7 @@
 
 //! Helpers for serving HTTP GET and HEAD responses asynchronously with the
 //! [http](http://crates.io/crates/http) crate and [tokio](https://crates.io/crates/tokio).
-//! Works well with [hyper](https://crates.io/crates/hyper) 0.14.x.
+//! Works well with [hyper](https://crates.io/crates/hyper) 1.x.
 //!
 //! This crate supplies two ways to respond to HTTP GET and HEAD requests:
 //!
@@ -30,12 +30,12 @@
 //! They have pros and cons. This table shows some of them:
 //!
 //! <table>
-//!   <tr><th><th><code>serve</code><th><code>streaming_body</code></tr>
-//!   <tr><td>automatic byte range serving<td>yes<td>no [<a href="#range">1</a>]</tr>
-//!   <tr><td>backpressure<td>yes<td>no [<a href="#backpressure">2</a>]</tr>
-//!   <tr><td>conditional GET<td>yes<td>no [<a href="#conditional_get">3</a>]</tr>
-//!   <tr><td>sends first byte before length known<td>no<td>yes</tr>
-//!   <tr><td>automatic gzip content encoding<td>no [<a href="#gzip">4</a>]<td>yes</tr>
+//!   <tr><th></th><th><code>serve</code></th><th><code>streaming_body</code></th></tr>
+//!   <tr><td>automatic byte range serving</td><td>yes</td><td>no [<a href="#range">1</a>]</td></tr>
+//!   <tr><td>backpressure</td><td>yes</td><td>no [<a href="#backpressure">2</a>]</td></tr>
+//!   <tr><td>conditional GET</td><td>yes</td><td>no [<a href="#conditional_get">3</a>]</td></tr>
+//!   <tr><td>sends first byte before length known</td><td>no</td><td>yes</td></tr>
+//!   <tr><td>automatic gzip content encoding</td><td>no [<a href="#gzip">4</a>]</td><td>yes</td></tr>
 //! </table>
 //!
 //! <a name="range">\[1\]</a>: `streaming_body` always sends the full body. Byte range serving
@@ -82,22 +82,10 @@
 //! similar). `streaming_body` doesn't need to keep its own copy for potential future use; it may
 //! be cheaper because it can simply hand ownership of the existing `Vec<u8>`s to hyper.
 //!
-//! # Why the weird type bounds? Why not use `hyper::Body` and `bytes::Bytes` for everything?
+//! # Why the weird type bounds? Why not use `hyper::Body` and `BoxError`?
 //!
-//! These bounds are compatible with `hyper::Body` and `bytes::Bytes`, and most callers will use
-//! those types. **Note:** if you see an error like the one below, ensure you are using hyper's
-//! `stream` feature:
-//!
-//! ```text
-//! error[E0277]: the trait bound `Body: From<Box<(dyn futures::Stream<Item = Result<_, _>> +
-//! std::marker::Send + 'static)>>` is not satisfied
-//! ```
-//!
-//! `Cargo.toml` should look similar to the following:
-//!
-//! ```toml
-//! hyper = { version = "0.14.7", features = ["stream"] }
-//! ```
+//! These bounds are compatible with `bytes::Bytes` and `BoxError`, and most callers will use
+//! those types.
 //!
 //! There are times when it's desirable to have more flexible ownership provided by a
 //! type such as `reffers::ARefs<'static, [u8]>`. One is `mmap`-based file serving:
@@ -106,13 +94,14 @@
 //! when dropped. In these cases, the caller can supply an alternate implementation of the
 //! `http_body::Body` trait which uses a different `Data` type than `bytes::Bytes`.
 
-#![deny(clippy::print_stderr, clippy::print_stdout)]
+#![deny(missing_docs, clippy::print_stderr, clippy::print_stdout)]
 #![cfg_attr(docsrs, feature(doc_cfg))]
 
 use bytes::Buf;
 use futures_core::Stream;
 use http::header::{self, HeaderMap, HeaderValue};
 use std::ops::Range;
+use std::pin::Pin;
 use std::str::FromStr;
 use std::time::SystemTime;
 
@@ -131,6 +120,17 @@ macro_rules! unsafe_fmt_ascii_val {
     }}
 }
 
+fn as_u64(len: usize) -> u64 {
+    const {
+        assert!(usize::MAX as u64 <= u64::MAX);
+    };
+    len as u64
+}
+
+/// A type-erased error.
+pub type BoxError = Box<dyn std::error::Error + Send + Sync>;
+
+mod body;
 mod chunker;
 
 #[cfg(feature = "dir")]
@@ -144,6 +144,7 @@ mod platform;
 mod range;
 mod serving;
 
+pub use crate::body::Body;
 pub use crate::file::ChunkedReadFile;
 pub use crate::gzip::BodyWriter;
 pub use crate::serving::serve;
@@ -151,12 +152,22 @@ pub use crate::serving::serve;
 /// A reusable, read-only, byte-rangeable HTTP entity for GET and HEAD serving.
 /// Must return exactly the same data on every call.
 pub trait Entity: 'static + Send + Sync {
-    type Error: 'static + Send + Sync;
+    /// The type of errors produced in [`Self::get_range`] chunks and in the final stream.
+    ///
+    /// [`BoxError`] is a good choice for most implementations.
+    ///
+    /// This must be convertable from [`BoxError`] to allow `http_serve` to
+    /// inject errors.
+    ///
+    /// Note that errors returned directly from the body to `hyper` just drop
+    /// the stream abruptly without being logged. Callers might use an
+    /// intermediary service for better observability.
+    type Error: 'static + From<BoxError>;
 
     /// The type of a data chunk.
     ///
     /// Commonly `bytes::Bytes` but may be something more exotic.
-    type Data: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>;
+    type Data: 'static + Buf + From<Vec<u8>> + From<&'static [u8]>;
 
     /// Returns the length of the entity's body in bytes.
     fn len(&self) -> u64;
@@ -167,12 +178,15 @@ pub trait Entity: 'static + Send + Sync {
     }
 
     /// Gets the body bytes indicated by `range`.
+    ///
+    /// The stream must return exactly `range.end - range.start` bytes or fail early with an `Err`.
+    #[allow(clippy::type_complexity)]
     fn get_range(
         &self,
         range: Range<u64>,
-    ) -> Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync>;
+    ) -> Pin<Box<dyn Stream<Item = Result<Self::Data, Self::Error>> + Send + Sync>>;
 
-    /// Adds entity headers such as `Content-Type` to the supplied `Headers` object.
+    /// Adds entity headers such as `Content-Type` to the supplied `HeaderMap`.
     /// In particular, these headers are the "other representation header fields" described by [RFC
     /// 7233 section 4.1](https://tools.ietf.org/html/rfc7233#section-4.1); they should exclude
     /// `Content-Range`, `Date`, `Cache-Control`, `ETag`, `Expires`, `Content-Location`, and `Vary`.
@@ -255,7 +269,7 @@ pub fn should_gzip(headers: &HeaderMap) -> bool {
                 };
                 quality = q;
             }
-        }
+        };
 
         if coding == "gzip" {
             gzip_q = Some(quality);
@@ -277,7 +291,7 @@ pub fn should_gzip(headers: &HeaderMap) -> bool {
     gzip_q > 0 && gzip_q >= identity_q
 }
 
-/// A builder returned by [streaming_body].
+/// A builder returned by [`streaming_body`].
 pub struct StreamingBodyBuilder {
     chunk_size: usize,
     gzip_level: u32,
@@ -295,7 +309,7 @@ pub struct StreamingBodyBuilder {
 /// # use http::{Request, Response, header::{self, HeaderValue}};
 /// use std::io::Write as _;
 ///
-/// fn respond(req: Request<hyper::Body>) -> std::io::Result<Response<hyper::Body>> {
+/// fn respond(req: Request<hyper::body::Incoming>) -> std::io::Result<Response<http_serve::Body>> {
 ///     let (mut resp, stream) = http_serve::streaming_body(&req).build();
 ///     if let Some(mut w) = stream {
 ///         write!(&mut w, "hello world")?;
@@ -314,7 +328,7 @@ pub struct StreamingBodyBuilder {
 /// # use http::{Request, Response, header::{self, HeaderValue}};
 /// use std::io::Write as _;
 ///
-/// fn respond(req: Request<hyper::Body>) -> std::io::Result<Response<hyper::Body>> {
+/// fn respond(req: Request<hyper::body::Incoming>) -> std::io::Result<Response<http_serve::Body>> {
 ///     let (mut resp, stream) = http_serve::streaming_body(&req).build();
 ///     if let Some(mut w) = stream {
 ///         tokio::spawn(async move {
@@ -329,12 +343,45 @@ pub struct StreamingBodyBuilder {
 ///     Ok(resp)
 /// }
 /// ```
-pub fn streaming_body<T>(req: &http::Request<T>) -> StreamingBodyBuilder {
+pub fn streaming_body<H: AsRequest>(req: &H) -> StreamingBodyBuilder {
     StreamingBodyBuilder {
         chunk_size: 4096,
         gzip_level: 6,
         should_gzip: should_gzip(req.headers()),
         body_needed: *req.method() != http::method::Method::HEAD,
+    }
+}
+
+/// A trait for types that provide the required request accessors needed by [`streaming_body`].
+pub trait AsRequest {
+    /// Returns the HTTP method.
+    fn method(&self) -> &http::Method;
+
+    /// Returns the request headers.
+    fn headers(&self) -> &http::HeaderMap;
+}
+
+impl<T> AsRequest for http::Request<T> {
+    #[inline]
+    fn method(&self) -> &http::Method {
+        self.method()
+    }
+
+    #[inline]
+    fn headers(&self) -> &http::HeaderMap {
+        self.headers()
+    }
+}
+
+impl AsRequest for http::request::Parts {
+    #[inline]
+    fn method(&self) -> &http::Method {
+        &self.method
+    }
+
+    #[inline]
+    fn headers(&self) -> &http::HeaderMap {
+        &self.headers
     }
 }
 
@@ -358,14 +405,14 @@ impl StreamingBodyBuilder {
     }
 
     /// Returns the HTTP response and, if the request is a `GET`, a body writer.
-    pub fn build<P, D, E>(self) -> (http::Response<P>, Option<BodyWriter<D, E>>)
+    #[allow(clippy::type_complexity)]
+    pub fn build<D, E>(self) -> (http::Response<crate::Body<D, E>>, Option<BodyWriter<D, E>>)
     where
         D: From<Vec<u8>> + Send + Sync,
         E: Send + Sync,
-        P: From<Box<dyn Stream<Item = Result<D, E>> + Send>>,
     {
-        let (w, stream) = chunker::BodyWriter::with_chunk_size(self.chunk_size);
-        let mut resp = http::Response::new(stream.into());
+        let (w, r) = chunker::Writer::with_chunk_size(self.chunk_size);
+        let mut resp = http::Response::new(Body(crate::body::BodyStream::Chunker(r)));
         resp.headers_mut()
             .append(header::VARY, HeaderValue::from_static("accept-encoding"));
 

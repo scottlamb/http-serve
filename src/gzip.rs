@@ -36,8 +36,8 @@ where
     D: From<Vec<u8>> + Send + 'static,
     E: Send + 'static,
 {
-    Raw(chunker::BodyWriter<D, E>),
-    Gzipped(flate2::write::GzEncoder<chunker::BodyWriter<D, E>>),
+    Raw(chunker::Writer<D, E>),
+    Gzipped(flate2::write::GzEncoder<chunker::Writer<D, E>>),
 
     /// No more data should be sent. `abort()` or `drop()` has been called, or a previous call
     /// discovered that the receiver has been dropped.
@@ -49,11 +49,11 @@ where
     D: From<Vec<u8>> + Send + 'static,
     E: Send + 'static,
 {
-    pub(crate) fn raw(raw: chunker::BodyWriter<D, E>) -> Self {
+    pub(crate) fn raw(raw: chunker::Writer<D, E>) -> Self {
         BodyWriter(Inner::Raw(raw))
     }
 
-    pub(crate) fn gzipped(raw: chunker::BodyWriter<D, E>, level: flate2::Compression) -> Self {
+    pub(crate) fn gzipped(raw: chunker::Writer<D, E>, level: flate2::Compression) -> Self {
         BodyWriter(Inner::Gzipped(flate2::GzBuilder::new().write(raw, level)))
     }
 

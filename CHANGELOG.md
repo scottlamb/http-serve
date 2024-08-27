@@ -1,6 +1,7 @@
-# unreleased
+# 0.4.0-rc.1 (2024-08-27)
 
-* bump minimum Rust to 1.70.
+* upgrade to `http` crate version 1.0.
+* bump minimum Rust to 1.79.
 
 # 0.3.6 (2022-05-01)
 

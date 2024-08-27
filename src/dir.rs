@@ -46,6 +46,7 @@ pub struct FsDir {
 }
 
 impl FsDir {
+    /// Builds a new `FsDir`.
     pub fn builder() -> FsDirBuilder {
         FsDirBuilder { auto_gzip: true }
     }

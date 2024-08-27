@@ -7,20 +7,19 @@
 // except according to those terms.
 
 use super::Entity;
+use crate::body::Body;
 use crate::etag;
 use crate::range;
+use crate::BoxError;
 use bytes::Buf;
-use futures_core::Stream;
-use futures_util::stream::{self, StreamExt};
+use futures_util::stream::StreamExt as _;
 use http::header::{self, HeaderMap, HeaderValue};
 use http::{self, Method, Request, Response, StatusCode};
-use http_body::Body;
 use httpdate::{fmt_http_date, parse_http_date};
-use pin_project::pin_project;
-use std::future::Future;
 use std::io::Write;
 use std::ops::Range;
 use std::pin::Pin;
+use std::task::Poll;
 use std::time::SystemTime;
 
 const MAX_DECIMAL_U64_BYTES: usize = 20; // u64::max_value().to_string().len()
@@ -66,34 +65,14 @@ fn parse_modified_hdrs(
     Ok((precondition_failed, not_modified))
 }
 
-fn static_body<D, E>(s: &'static str) -> Box<dyn Stream<Item = Result<D, E>> + Send>
-where
-    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send,
-{
-    Box::new(stream::once(futures_util::future::ok(s.as_bytes().into())))
-}
-
-fn empty_body<D, E>() -> Box<dyn Stream<Item = Result<D, E>> + Send>
-where
-    D: 'static + Send + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send,
-{
-    Box::new(stream::empty())
-}
-
 /// Serves GET and HEAD requests for a given byte-ranged entity.
 /// Handles conditional & subrange requests.
 /// The caller is expected to have already determined the correct entity and appended
 /// `Expires`, `Cache-Control`, and `Vary` headers if desired.
-pub fn serve<
-    Ent: Entity,
-    B: Body + From<Box<dyn Stream<Item = Result<Ent::Data, Ent::Error>> + Send>>,
-    BI,
->(
+pub fn serve<Ent: Entity, BI>(
     entity: Ent,
     req: &Request<BI>,
-) -> Response<B> {
+) -> Response<Body<Ent::Data, Ent::Error>> {
     // serve takes entity itself for ownership, as needed for the multipart case. But to avoid
     // monomorphization code bloat when there are many implementations of Entity<Data, Error>,
     // delegate as much as possible to functions which take a reference to a trait object.
@@ -101,45 +80,43 @@ pub fn serve<
         ServeInner::Simple(res) => res,
         ServeInner::Multipart {
             res,
-            mut part_headers,
+            part_headers,
             ranges,
-        } => {
-            let bodies = stream::unfold(0, move |state| {
-                next_multipart_body_chunk(state, &entity, &ranges[..], &mut part_headers[..])
-            });
-            let body = bodies.flatten();
-            let body: Box<dyn Stream<Item = Result<Ent::Data, Ent::Error>> + Send> = Box::new(body);
-            res.body(body.into()).unwrap()
-        }
+            len,
+        } => res
+            .body(crate::body::Body(crate::body::BodyStream::Multipart(
+                MultipartStream::new(Box::new(entity), part_headers, ranges, len),
+            )))
+            .expect("multipart response should be valid"),
     }
 }
 
 /// An instruction from `serve_inner` to `serve` on how to respond.
-enum ServeInner<B> {
-    Simple(Response<B>),
+enum ServeInner<D, E> {
+    Simple(Response<Body<D, E>>),
     Multipart {
         res: http::response::Builder,
         part_headers: Vec<Vec<u8>>,
         ranges: Vec<Range<u64>>,
+        len: u64,
     },
 }
 
 /// Runs trait object-based inner logic for `serve`.
 fn serve_inner<
-    D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Sync,
-    B: Body + From<Box<dyn Stream<Item = Result<D, E>> + Send>>,
+    D: 'static + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    E: 'static + From<BoxError>,
 >(
     ent: &dyn Entity<Error = E, Data = D>,
     method: &http::Method,
     req_hdrs: &http::HeaderMap,
-) -> ServeInner<B> {
+) -> ServeInner<D, E> {
     if method != Method::GET && method != Method::HEAD {
         return ServeInner::Simple(
             Response::builder()
                 .status(StatusCode::METHOD_NOT_ALLOWED)
                 .header(header::ALLOW, HeaderValue::from_static("get, head"))
-                .body(static_body::<D, E>("This resource only supports GET and HEAD.").into())
+                .body(Body::from("This resource only supports GET and HEAD."))
                 .unwrap(),
         );
     }
@@ -153,7 +130,7 @@ fn serve_inner<
                 return ServeInner::Simple(
                     Response::builder()
                         .status(StatusCode::BAD_REQUEST)
-                        .body(static_body::<D, E>(s).into())
+                        .body(Body::from(s))
                         .unwrap(),
                 )
             }
@@ -209,15 +186,12 @@ fn serve_inner<
 
     if precondition_failed {
         res = res.status(StatusCode::PRECONDITION_FAILED);
-        return ServeInner::Simple(
-            res.body(static_body::<D, E>("Precondition failed").into())
-                .unwrap(),
-        );
+        return ServeInner::Simple(res.body(Body::from("Precondition failed")).unwrap());
     }
 
     if not_modified {
         res = res.status(StatusCode::NOT_MODIFIED);
-        return ServeInner::Simple(res.body(empty_body::<D, E>().into()).unwrap());
+        return ServeInner::Simple(res.body(Body::empty()).unwrap());
     }
 
     let len = ent.len();
@@ -238,30 +212,39 @@ fn serve_inner<
                 res = res.status(StatusCode::PARTIAL_CONTENT);
                 (range.clone(), include_entity_headers_on_range)
             } else {
-                let ranges = ranges.into_vec();
-
                 // Before serving multiple ranges via multipart/byteranges, estimate the total
                 // length. ("80" is the RFC's estimate of the size of each part's header.) If it's
                 // more than simply serving the whole entity, do that instead.
-                let est_len: u64 = ranges.iter().map(|r| 80 + r.end - r.start).sum();
-                if est_len < len {
-                    let (res, part_headers) = prepare_multipart(
-                        res,
-                        &ranges[..],
-                        len,
-                        include_entity_headers_on_range.then(|| {
-                            let mut h = HeaderMap::new();
-                            ent.add_headers(&mut h);
-                            h
-                        }),
-                    );
+                let est_len = ranges.iter().try_fold(0u64, |acc, r| {
+                    acc.checked_add(80)
+                        .and_then(|a| a.checked_add(r.end - r.start))
+                });
+                if matches!(est_len, Some(l) if l < len) {
+                    let each_part_hdrs = include_entity_headers_on_range.then(|| {
+                        let mut h = HeaderMap::new();
+                        ent.add_headers(&mut h);
+                        h
+                    });
+                    let (res, part_headers, len) =
+                        match prepare_multipart(res, &ranges[..], len, each_part_hdrs) {
+                            Ok(v) => v,
+                            Err(MultipartLenOverflowError) => {
+                                return ServeInner::Simple(
+                                    Response::builder()
+                                        .status(StatusCode::PAYLOAD_TOO_LARGE)
+                                        .body(Body::from("Multipart response too large"))
+                                        .unwrap(),
+                                );
+                            }
+                        };
                     if method == Method::HEAD {
-                        return ServeInner::Simple(res.body(empty_body::<D, E>().into()).unwrap());
+                        return ServeInner::Simple(res.body(Body::empty()).unwrap());
                     }
                     return ServeInner::Multipart {
                         res,
                         part_headers,
-                        ranges,
+                        ranges: ranges.into_vec(),
+                        len,
                     };
                 }
 
@@ -274,56 +257,37 @@ fn serve_inner<
                 unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES + "bytes */".len(), "bytes */{}", len),
             );
             res = res.status(StatusCode::RANGE_NOT_SATISFIABLE);
-            return ServeInner::Simple(res.body(empty_body::<D, E>().into()).unwrap());
+            return ServeInner::Simple(res.body(Body::empty()).unwrap());
         }
     };
+    let len = range.end - range.start;
     res = res.header(
         header::CONTENT_LENGTH,
-        unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", range.end - range.start),
+        unsafe_fmt_ascii_val!(MAX_DECIMAL_U64_BYTES, "{}", len),
     );
     let body = match *method {
-        Method::HEAD => empty_body::<D, E>(),
-        _ => ent.get_range(range),
+        Method::HEAD => Body::empty(),
+        _ => Body(crate::body::BodyStream::ExactLen(
+            crate::body::ExactLenStream::new(range.end - range.start, ent.get_range(range)),
+        )),
     };
-    let mut res = res.body(body.into()).unwrap();
+    let mut res = res.body(body).unwrap();
     if include_entity_headers {
         ent.add_headers(res.headers_mut());
     }
     ServeInner::Simple(res)
 }
 
-/// A body for use in the "stream of streams" (see `prepare_multipart` and its call site).
-/// This avoids an extra allocation for the part headers and overall trailer.
-#[pin_project(project=InnerBodyProj)]
-enum InnerBody<D, E> {
-    Once(Option<D>),
-
-    // The box variant _holds_ a pin but isn't structurally pinned.
-    B(Pin<Box<dyn Stream<Item = Result<D, E>> + Sync + Send>>),
-}
-
-impl<D, E> Stream for InnerBody<D, E> {
-    type Item = Result<D, E>;
-    fn poll_next(
-        self: Pin<&mut Self>,
-        ctx: &mut std::task::Context,
-    ) -> std::task::Poll<Option<Result<D, E>>> {
-        let mut this = self.project();
-        match this {
-            InnerBodyProj::Once(ref mut o) => std::task::Poll::Ready(o.take().map(Ok)),
-            InnerBodyProj::B(b) => b.as_mut().poll_next(ctx),
-        }
-    }
-}
+struct MultipartLenOverflowError;
 
 /// Prepares to send a `multipart/mixed` response.
-/// Returns the response builder (with overall headers added) and each part's headers.
+/// Returns the response builder (with overall headers added), each part's headers, and overall len.
 fn prepare_multipart(
     mut res: http::response::Builder,
     ranges: &[Range<u64>],
     len: u64,
     include_entity_headers: Option<http::header::HeaderMap>,
-) -> (http::response::Builder, Vec<Vec<u8>>) {
+) -> Result<(http::response::Builder, Vec<Vec<u8>>, u64), MultipartLenOverflowError> {
     let mut each_part_headers = Vec::new();
     if let Some(h) = include_entity_headers {
         each_part_headers.reserve(
@@ -339,7 +303,7 @@ fn prepare_multipart(
         }
     }
 
-    let mut body_len = 0;
+    let mut body_len: u64 = 0;
     let mut part_headers: Vec<Vec<u8>> = Vec::with_capacity(ranges.len());
     for r in ranges {
         let mut buf = Vec::with_capacity(
@@ -358,10 +322,15 @@ fn prepare_multipart(
         .unwrap();
         buf.extend_from_slice(&each_part_headers);
         buf.extend_from_slice(b"\r\n");
-        body_len += buf.len() as u64 + r.end - r.start;
+        body_len = body_len
+            .checked_add(crate::as_u64(buf.len()))
+            .and_then(|l| l.checked_add(r.end - r.start))
+            .ok_or(MultipartLenOverflowError)?;
         part_headers.push(buf);
     }
-    body_len += PART_TRAILER.len() as u64;
+    body_len = body_len
+        .checked_add(crate::as_u64(PART_TRAILER.len()))
+        .ok_or(MultipartLenOverflowError)?;
 
     res = res.header(
         header::CONTENT_LENGTH,
@@ -373,37 +342,106 @@ fn prepare_multipart(
     );
     res = res.status(StatusCode::PARTIAL_CONTENT);
 
-    (res, part_headers)
+    Ok((res, part_headers, body_len))
+}
+
+pub(crate) struct MultipartStream<D, E> {
+    /// The current part's body stream, set in "send body" state.
+    cur: Option<crate::body::ExactLenStream<D, E>>,
+
+    /// Current state:
+    ///
+    /// * `i << 1` for `i` in `[0, ranges.len())`: send part headers.
+    /// * `i << 1 | 1` for `i` in `[0, ranges.len())`: send body.
+    /// * `ranges.len() << 1`: send trailer
+    /// * `ranges.len() << 1 | 1`: end
+    state: usize,
+    part_headers: Vec<Vec<u8>>,
+    ranges: Vec<std::ops::Range<u64>>,
+    entity: Box<dyn Entity<Data = D, Error = E>>,
+    remaining: u64,
+}
+
+impl<D, E> MultipartStream<D, E> {
+    pub(crate) fn new(
+        entity: Box<dyn Entity<Data = D, Error = E>>,
+        part_headers: Vec<Vec<u8>>,
+        ranges: Vec<std::ops::Range<u64>>,
+        len: u64,
+    ) -> Self {
+        Self {
+            cur: None,
+            state: 0,
+            part_headers,
+            ranges,
+            entity,
+            remaining: len,
+        }
+    }
+
+    pub(crate) fn remaining(&self) -> u64 {
+        self.remaining
+    }
 }
 
 /// The trailer after all `multipart/byteranges` body parts.
 const PART_TRAILER: &[u8] = b"\r\n--B--\r\n";
 
-/// Produces a single chunk of the body and the following state, for use in an `unfold` call.
-///
-/// Alternates between portions of `part_headers` and their corresponding bodies, then the overall
-/// trailer, then end the stream.
-fn next_multipart_body_chunk<D, E>(
-    state: usize,
-    ent: &dyn Entity<Data = D, Error = E>,
-    ranges: &[Range<u64>],
-    part_headers: &mut [Vec<u8>],
-) -> impl Future<Output = Option<(InnerBody<D, E>, usize)>>
+impl<D, E> futures_core::Stream for MultipartStream<D, E>
 where
-    D: 'static + Send + Sync + Buf + From<Vec<u8>> + From<&'static [u8]>,
-    E: 'static + Send + Sync,
+    D: 'static + Buf + From<Vec<u8>> + From<&'static [u8]>,
+    E: 'static + From<BoxError>,
 {
-    let i = state >> 1;
-    let odd = (state & 1) == 1;
-    let body = if i == ranges.len() && odd {
-        return futures_util::future::ready(None);
-    } else if i == ranges.len() {
-        InnerBody::Once(Some(PART_TRAILER.into()))
-    } else if odd {
-        InnerBody::B(Pin::from(ent.get_range(ranges[i].clone())))
-    } else {
-        let v = std::mem::take(&mut part_headers[i]);
-        InnerBody::Once(Some(v.into()))
-    };
-    futures_util::future::ready(Some((body, state + 1)))
+    type Item = Result<D, E>;
+
+    fn poll_next(
+        self: Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> Poll<Option<Self::Item>> {
+        let this = Pin::into_inner(self);
+        loop {
+            if let Some(ref mut cur) = this.cur {
+                match cur.poll_next_unpin(cx) {
+                    Poll::Ready(Some(Ok(d))) => {
+                        this.remaining -= crate::as_u64(d.remaining());
+                        return Poll::Ready(Some(Ok(d)));
+                    }
+                    Poll::Ready(Some(Err(e))) => {
+                        // Fuse.
+                        this.remaining = 0;
+                        this.state = this.ranges.len() << 1 | 1;
+                        return Poll::Ready(Some(Err(e)));
+                    }
+                    Poll::Ready(None) => {
+                        this.cur = None;
+                        this.state += 1;
+                    }
+                    Poll::Pending => return Poll::Pending,
+                }
+            }
+
+            let i = this.state >> 1;
+            let odd = (this.state & 1) == 1;
+            if i == this.ranges.len() && odd {
+                debug_assert_eq!(this.remaining, 0);
+                return Poll::Ready(None);
+            }
+            if i == this.ranges.len() {
+                this.state += 1;
+                this.remaining -= crate::as_u64(PART_TRAILER.len());
+                return Poll::Ready(Some(Ok(PART_TRAILER.into())));
+            } else if odd {
+                let r = &this.ranges[i];
+                this.cur = Some(crate::body::ExactLenStream::new(
+                    r.end - r.start,
+                    this.entity.get_range(r.clone()),
+                ));
+            } else {
+                let v = std::mem::take(&mut this.part_headers[i]);
+                this.state += 1;
+                this.remaining -= crate::as_u64(v.len());
+                return Poll::Ready(Some(Ok(v.into())));
+            };
+        }
+    }
 }
