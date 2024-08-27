@@ -38,13 +38,13 @@ pub(crate) fn parse(range: Option<&HeaderValue>, len: u64) -> ResolvedRanges {
     };
 
     // byte-ranges-specifier = bytes-unit "=" byte-range-set
-    if !range.starts_with("bytes=") {
+    let Some(bytes) = range.strip_prefix("bytes=") else {
         return ResolvedRanges::None;
-    }
+    };
 
     // byte-range-set  = 1#( byte-range-spec / suffix-byte-range-spec )
     let mut ranges: SmallVec<[Range<u64>; 1]> = SmallVec::new();
-    for r in range[6..].split(',') {
+    for r in bytes.split(',') {
         // Trim OWS = *( SP / HTAB )
         let r = r.trim_start_matches(|c| c == ' ' || c == '\t');
 

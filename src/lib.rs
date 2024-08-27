@@ -237,30 +237,23 @@ pub fn should_gzip(headers: &HeaderMap) -> bool {
     };
     for qi in parts {
         // Parse.
-        let qi = qi.trim();
-        let mut parts = qi.rsplitn(2, ';').map(|p| p.trim());
-        let last_part = parts
-            .next()
-            .expect("rsplitn should return at least one part");
         let coding;
         let quality;
-        match parts.next() {
+        match qi.split_once(';') {
             None => {
-                coding = last_part;
+                coding = qi.trim();
                 quality = 1000;
             }
-            Some(c) => {
-                if !last_part.starts_with("q=") {
+            Some((c, q)) => {
+                coding = c.trim();
+                let Some(q) = q
+                    .trim()
+                    .strip_prefix("q=")
+                    .and_then(|q| parse_qvalue(q).ok())
+                else {
                     return false; // unparseable.
-                }
-                let q = &last_part[2..];
-                match parse_qvalue(q) {
-                    Ok(q) => {
-                        coding = c;
-                        quality = q;
-                    }
-                    Err(_) => return false, // unparseable.
                 };
+                quality = q;
             }
         }
 

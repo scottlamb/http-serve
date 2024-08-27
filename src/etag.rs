@@ -8,18 +8,16 @@
 
 use http::header::{self, HeaderMap, HeaderValue};
 
-/// Performs weak validation of two etags (such as B"W/\"foo\"" or B"\"bar\"").
-pub fn weak_eq(mut a: &[u8], mut b: &[u8]) -> bool {
-    if a.starts_with(b"W/") {
-        a = &a[2..];
-    }
-    if b.starts_with(b"W/") {
-        b = &b[2..];
-    }
+/// Performs weak validation of two etags (such as `B"W/\"foo\""`` or `B"\"bar\""``)
+/// as in [RFC 7232 section 2.3.2](https://datatracker.ietf.org/doc/html/rfc7232#section-2.3.2).
+pub fn weak_eq(a: &[u8], b: &[u8]) -> bool {
+    let a = a.strip_prefix(b"W/").unwrap_or(a);
+    let b = b.strip_prefix(b"W/").unwrap_or(b);
     a == b
 }
 
-/// Performs strong validation of two etags (such as B"W/\"foo\"" or B"\"bar\"").
+/// Performs strong validation of two etags (such as `B"W/\"foo\""` or `B"\"bar\""``)
+/// as in [RFC 7232 section 2.3.2](https://datatracker.ietf.org/doc/html/rfc7232#section-2.3.2).
 pub fn strong_eq(a: &[u8], b: &[u8]) -> bool {
     a == b && !a.starts_with(b"W/")
 }
@@ -54,7 +52,7 @@ impl<'a> Iterator for List<'a> {
             return None;
         }
 
-        // If on an etag, find its end. Note the '"' can't be escaped, simplifying matters.
+        // If on an etag, find its end. Note the `"` can't be escaped, simplifying matters.
         let end = if self.remaining.starts_with(b"W/\"") {
             self.remaining[3..]
                 .iter()
@@ -66,21 +64,17 @@ impl<'a> Iterator for List<'a> {
                 .position(|&b| b == b'"')
                 .map(|p| p + 1)
         } else {
-            self.corrupt = true;
             None
         };
-        let end = match end {
-            None => {
-                self.corrupt = true;
-                return None;
-            }
-            Some(e) => e,
+        let Some(end) = end else {
+            self.corrupt = true;
+            return None;
         };
         let (etag, mut rem) = self.remaining.split_at(end + 1);
-        if rem.starts_with(b",") {
-            rem = &rem[1..];
-            while !rem.is_empty() && (rem[0] == b' ' || rem[0] == b'\t') {
-                rem = &rem[1..];
+        if let [b',', r @ ..] = rem {
+            rem = r;
+            while let [b' ' | b'\t', tail @ ..] = rem {
+                rem = tail;
             }
         }
         self.remaining = rem;
