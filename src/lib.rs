@@ -122,7 +122,7 @@ macro_rules! unsafe_fmt_ascii_val {
 
 fn as_u64(len: usize) -> u64 {
     const {
-        assert!(usize::MAX as u64 <= u64::MAX);
+        assert!(std::mem::size_of::<usize>() <= std::mem::size_of::<u64>());
     };
     len as u64
 }
