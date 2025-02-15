@@ -35,7 +35,7 @@ struct List<'a> {
     corrupt: bool,
 }
 
-impl<'a> List<'a> {
+impl List<'_> {
     fn from(l: &[u8]) -> List {
         List {
             remaining: l,
