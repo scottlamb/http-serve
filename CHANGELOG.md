@@ -1,3 +1,9 @@
+# 0.4.0-rc.2 (2025-02-15)
+
+* Fix `http_serve::streaming_body` bug in which it would end the stream
+  prematurely if the body is polled twice with the same waker before additional
+  data is added. Unclear if this bug was ever hit in practice.
+
 # 0.4.0-rc.1 (2024-08-27)
 
 * upgrade to `http` crate version 1.0.

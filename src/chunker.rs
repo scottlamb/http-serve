@@ -107,17 +107,18 @@ where
                 debug_assert_eq!(ready_bytes, 0);
 
                 if !writer_dropped {
-                    if !l.waker.as_ref().is_some_and(|w| w.will_wake(cx.waker())) {
-                        l.waker = Some(cx.waker().clone());
-                        l.state = SharedState::Ok {
-                            ready,
-                            ready_bytes,
-                            writer_dropped,
-                        };
-                        drop(l);
-                        return Poll::Pending;
+                    match l.waker.as_mut() {
+                        Some(w) if !w.will_wake(cx.waker()) => w.clone_from(cx.waker()),
+                        Some(_) => {}
+                        None => l.waker = Some(cx.waker().clone()),
                     }
-                    return Poll::Ready(None);
+                    l.state = SharedState::Ok {
+                        ready,
+                        ready_bytes,
+                        writer_dropped,
+                    };
+                    drop(l);
+                    return Poll::Pending;
                 }
 
                 Poll::Ready(None)
@@ -290,8 +291,12 @@ where
 #[cfg(test)]
 mod tests {
     use super::Writer;
+    use futures_core::Stream;
     use futures_util::{stream::StreamExt, stream::TryStreamExt};
-    use std::io::Write;
+    use std::{
+        io::Write,
+        task::{Context, Poll},
+    };
 
     type BoxError = Box<dyn std::error::Error + 'static + Send + Sync>;
     type Reader = super::Reader<Vec<u8>, BoxError>;
@@ -308,6 +313,25 @@ mod tests {
         drop(w);
         assert!(body.is_end_stream());
         assert_eq!(b"", &to_vec(body).await[..]);
+    }
+
+    #[test]
+    fn extra_poll() {
+        let (mut w, body): (_, Reader) = Writer::with_chunk_size(4);
+        let mut body = std::pin::pin!(body);
+        assert!(!body.is_end_stream());
+
+        // Use a dummy waker.
+        let mut cx = Context::from_waker(futures_util::task::noop_waker_ref());
+        assert!(body.as_mut().poll_next(&mut cx).is_pending());
+        assert!(body.as_mut().poll_next(&mut cx).is_pending());
+        assert_eq!(w.write(b"1").unwrap(), 1);
+        drop(w);
+        let next = body.as_mut().poll_next(&mut cx);
+        assert!(
+            matches!(&next,  Poll::Ready(Some(Ok(chunk))) if chunk == b"1"),
+            "next={next:?}"
+        );
     }
 
     // A smaller-than-chunk-size write shouldn't be flushed on write.
